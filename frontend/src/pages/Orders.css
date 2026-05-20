@@ -1,0 +1,123 @@
+/* ================= PAGE LAYOUT ================= */
+.orders-page {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* ================= PAGE TITLE ================= */
+.orders-page h2 {
+  font-size: 36px;     /* 🔼 change ONLY this to grow/shrink title */
+  font-weight: 600;
+  text-align: center; /* ✅ center title */
+  margin-bottom: 20px;
+}
+
+/* ================= ORDER FORM ================= */
+.order-form {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  background: #f5f7fa;
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.order-form input {
+  padding: 8px;
+  font-size: 14px;
+}
+
+.order-form button {
+  grid-column: span 3;
+  padding: 10px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.order-form button:hover {
+  background: #1e40af;
+}
+
+/* ================= SEARCH ================= */
+.search-input {
+  width: 100%;
+  max-width: 400px;
+  padding: 8px 12px;
+  margin: 12px 0 20px 0;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+/* ================= TABLE ================= */
+.orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+}
+
+.orders-table th,
+.orders-table td {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: left;
+}
+
+.orders-table th {
+  background: #1e293b;
+  color: white;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+
+.orders-table th:hover {
+  background-color: #334155;
+}
+
+/* Sort indicator */
+.orders-table th::after {
+  content: " ⇅";
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+/* ================= ACTION BUTTONS ================= */
+.orders-table button {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.orders-table button.edit {
+  background-color: #2563eb;
+  color: white;
+}
+
+.orders-table button.edit:hover {
+  background-color: #1e40af;
+}
+
+.orders-table button.delete {
+  background-color: #dc2626;
+  color: white;
+  margin-left: 6px;
+}
+
+.orders-table button.delete:hover {
+  background-color: #991b1b;
+}
+
+/* ================= EMPTY STATE ================= */
+.orders-table td[colspan] {
+  padding: 20px;
+  text-align: center;
+  color: #6b7280;
+}

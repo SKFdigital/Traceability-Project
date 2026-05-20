@@ -1,0 +1,24 @@
+.login-container {
+  width: 300px;
+  margin: 120px auto;
+  padding: 20px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.login-container input,
+.login-container select {
+  width: 100%;
+  margin: 10px 0;
+  padding: 8px;
+}
+
+.login-container button {
+  width: 100%;
+  padding: 10px;
+  background-color: #2563eb;
+  color: white;
+  border: none;
+  cursor: pointer;
+}
