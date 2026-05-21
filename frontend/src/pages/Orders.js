@@ -27,7 +27,8 @@ function Orders() {
   // ================= FETCH ORDERS =================
   const fetchOrders = async () => {
     try {
-      const res = await fetch("${API_BASE_URL}/get_orders");
+      // ✅ FIXED: Changed double quotes to backticks
+      const res = await fetch(`${API_BASE_URL}/get_orders`);
       const data = await res.json();
       setOrders(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -38,7 +39,8 @@ function Orders() {
   // ================= FETCH SHEET NAMES =================
   const fetchSheetNames = async () => {
     try {
-      const res = await fetch("${API_BASE_URL}/get_sheet_names");
+      // ✅ FIXED: Changed double quotes to backticks
+      const res = await fetch(`${API_BASE_URL}/get_sheet_names`);
       const data = await res.json();
       const sheets = Array.isArray(data) ? data : data.sheets || [];
 
@@ -97,9 +99,10 @@ function Orders() {
       return;
     }
 
+    // ✅ FIXED: Changed the baseline fallback line to backticks
     const url = editingId
       ? `${API_BASE_URL}/update_order/${editingId}`
-      : "${API_BASE_URL}/add_order";
+      : `${API_BASE_URL}/add_order`;
 
     const method = editingId ? "PUT" : "POST";
 
@@ -152,7 +155,8 @@ function Orders() {
   // ================= IMPORT FROM GOOGLE SHEET =================
   const handleImport = async () => {
     try {
-      const res = await fetch("${API_BASE_URL}/import_orders_google_sheet", {
+      // ✅ FIXED: Changed double quotes to backticks
+      const res = await fetch(`${API_BASE_URL}/import_orders_google_sheet`, {
         method: "POST",
       });
       const data = await res.json();
