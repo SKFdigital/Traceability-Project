@@ -1,3 +1,4 @@
+const API_BASE_URL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
 import { useEffect, useMemo, useState } from "react";
 import "./Orders.css";
 
@@ -26,7 +27,7 @@ function Orders() {
   // ================= FETCH ORDERS =================
   const fetchOrders = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/get_orders");
+      const res = await fetch("${API_BASE_URL}/get_orders");
       const data = await res.json();
       setOrders(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -37,7 +38,7 @@ function Orders() {
   // ================= FETCH SHEET NAMES =================
   const fetchSheetNames = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/get_sheet_names");
+      const res = await fetch("${API_BASE_URL}/get_sheet_names");
       const data = await res.json();
       const sheets = Array.isArray(data) ? data : data.sheets || [];
 
@@ -97,8 +98,8 @@ function Orders() {
     }
 
     const url = editingId
-      ? `http://127.0.0.1:8000/update_order/${editingId}`
-      : "http://127.0.0.1:8000/add_order";
+      ? `${API_BASE_URL}/update_order/${editingId}`
+      : "${API_BASE_URL}/add_order";
 
     const method = editingId ? "PUT" : "POST";
 
@@ -141,7 +142,7 @@ function Orders() {
 
   const handleDelete = async (id) => {
     try {
-      await fetch(`http://127.0.0.1:8000/delete_order/${id}`, { method: "DELETE" });
+      await fetch(`${API_BASE_URL}/delete_order/${id}`, { method: "DELETE" });
       fetchOrders();
     } catch (err) {
       console.error("Delete failed:", err);
@@ -151,7 +152,7 @@ function Orders() {
   // ================= IMPORT FROM GOOGLE SHEET =================
   const handleImport = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/import_orders_google_sheet", {
+      const res = await fetch("${API_BASE_URL}/import_orders_google_sheet", {
         method: "POST",
       });
       const data = await res.json();
@@ -220,7 +221,7 @@ function Orders() {
   // ================= UPDATE STATUS INLINE =================
   const handleStatusChange = async (orderId, newStatus) => {
     try {
-      await fetch(`http://127.0.0.1:8000/update_order/${orderId}`, {
+      await fetch(`${API_BASE_URL}/update_order/${orderId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
