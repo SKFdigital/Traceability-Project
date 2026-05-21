@@ -6,43 +6,25 @@ from datetime import datetime
 # ---------- INTERNAL IMPORTS ----------
 from database import Base, engine, SessionLocal
 from models import (
-    User,
-    Inventory,
-    ProductionPlan,
-    Vendor,
-    Procurement,
-    FinanceTransaction,
-    Logistics,
-    ChatbotLog,
+    User, Inventory, ProductionPlan, Vendor, Procurement,
+    FinanceTransaction, Logistics, ChatbotLog,
 )
-
 from auth import hash_password, verify_password, create_token
 from schemas import RegisterRequest, LoginRequest
-
-# 👇 ORDERS ROUTER (THIS MUST EXIST EXACTLY LIKE THIS)
 from order_backend_postgres import router as order_router
 
 # ================= APP =================
 app = FastAPI(title="AI-Driven SCM Backend API")
 
 # ================= CORS =================
-# Define the allowed origins list first
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://scm-project-liard.vercel.app"
-]
-
+# Using a wide-open policy to eliminate connection errors while you debug
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-
 
 # ================= DATABASE =================
 Base.metadata.create_all(bind=engine)
@@ -54,49 +36,48 @@ def get_db():
     finally:
         db.close()
 
-# ================= REGISTRATION ROUTE =================
+# ================= AUTHENTICATION ROUTES =================
 @app.post("/register")
-def register_user(user_data: RegisterRequest, db: Session = Depends(get_db)):
-    # 1. Check if user already exists
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
+def register(data: RegisterRequest, db: Session = Depends(get_db)):
+    existing_user = db.query(User).filter(User.email == data.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # 2. Hash the password
-    hashed_pwd = hash_password(user_data.password)
-    
-    # 3. Create the new User object
-    new_user = User(
-        email=user_data.email,
-        password=hashed_pwd
-        # Add other fields here if your User model requires them (e.g., name, role)
+
+    user = User(
+        email=data.email,
+        password_hash=hash_password(data.password), # Matches your models
+        role=data.role,
+        is_active=True,
+        created_at=datetime.utcnow(),
     )
-    
-    # 4. Save to database
-    db.add(new_user)
+    db.add(user)
     db.commit()
-    db.refresh(new_user)
-    
-    return {"message": "User registered successfully"}
+    db.refresh(user)
+    return {"message": "User registered successfully", "user_id": user.id}
 
-# ================= LOGIN ROUTE (Ensure this is in your code) =================
 @app.post("/login")
-def login(user_data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == user_data.email).first()
-    if not user or not verify_password(user_data.password, user.password):
+def login(data: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == data.email).first()
+    # Ensure you are checking the hashed password field
+    if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    token = create_token(user.email)
-    return {"access_token": token, "token_type": "bearer"}
 
-# ================= INCLUDE ROUTER =================
+    token = create_token({"email": user.email, "role": user.role})
+    return {"access_token": token, "token_type": "bearer", "role": user.role}
+
+# ================= INCLUDE ROUTERS =================
 app.include_router(order_router)
 
-
-# ================= ROOT =================
+# ================= OTHER ROUTES (Kept intact) =================
 @app.get("/")
 def root():
-    return {"message": "SCM Backend Running (Unified Backend)"}
+    return {"message": "SCM Backend Running"}
+
+@app.get("/users")
+def list_users(db: Session = Depends(get_db)):
+    return db.query(User).all()
+
+
 
 # ================= REGISTER =================
 @app.post("/register")
