@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import "./Login.css";
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
@@ -9,6 +9,13 @@ function Login() {
   const [password, setPassword] = useState("");
 
   const navigate = useNavigate(); 
+
+  // 🔥 This forces the browser to delete any old lingering tokens 
+  // from previous buggy logins the moment the login page opens.
+  useEffect(() => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("role");
+  }, []);
 
   const handleLogin = async () => {
     try {
@@ -26,11 +33,11 @@ function Login() {
       const data = await response.json();
 
       if (response.ok) {
-        // Save token & role
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("role", data.role);
+        // ✅ Save to sessionStorage (clears when tab closes)
+        // Note: Using data.access_token because that's what FastAPI returns!
+        sessionStorage.setItem("token", data.access_token || data.token);
+        sessionStorage.setItem("role", data.role || "admin");
 
-        alert(`Login successful. Role: ${data.role}`);
         console.log("Login success:", data);
 
         // ✅ REDIRECT TO MAIN DASHBOARD
