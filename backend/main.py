@@ -26,16 +26,21 @@ from order_backend_postgres import router as order_router
 app = FastAPI(title="AI-Driven SCM Backend API")
 
 # ================= CORS =================
+# Define the allowed origins list first
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://scm-project-liard.vercel.app"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # ================= DATABASE =================
 Base.metadata.create_all(bind=engine)
