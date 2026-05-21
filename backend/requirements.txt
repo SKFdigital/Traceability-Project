@@ -7,3 +7,4 @@ passlib[argon2]
 python-multipart
 email-validator
 pydantic
+requests
