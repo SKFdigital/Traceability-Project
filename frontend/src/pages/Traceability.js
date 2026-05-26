@@ -336,4 +336,4 @@ const Traceability = () => {
 };
 
 export default Traceability;
-```
+
