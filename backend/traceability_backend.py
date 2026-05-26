@@ -77,17 +77,46 @@ def extract_base_mo(mo):
     return mo
 
 def parse_date_safe(value):
+
     try:
-        return pd.to_datetime(value).date()
+
+        if pd.isna(value):
+            return None
+
+        parsed = pd.to_datetime(value, errors='coerce')
+
+        if pd.isna(parsed):
+            return None
+
+        return parsed.date()
+
     except:
         return None
 
+
 def within_date_window(date1, date2, days=30):
-    if not date1 or not date2:
+
+    if date1 is None or date2 is None:
         return False
 
-    diff = abs((date1 - date2).days)
-    return diff <= days
+    try:
+
+        if pd.isna(date1) or pd.isna(date2):
+            return False
+
+        if isinstance(date1, pd.Timestamp):
+            date1 = date1.date()
+
+        if isinstance(date2, pd.Timestamp):
+            date2 = date2.date()
+
+        diff = abs((date1 - date2).days)
+
+        return diff <= days
+
+    except:
+        return False
+
 
 def download_excel(url):
     response = requests.get(url)
