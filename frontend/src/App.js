@@ -37,6 +37,7 @@ function App() {
         <Route path="/dashboard" element={<ProtectedRoute><MainDashboard /></ProtectedRoute>} />
         <Route path="/forecasting" element={<ProtectedRoute><Forecasting /></ProtectedRoute>} />
         <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
+        <Route path="/traceability" element={<Traceability />} />  
         <Route path="/inventory" element={<ProtectedRoute><Inventory /></ProtectedRoute>} />
         <Route path="/production" element={<ProtectedRoute><Production /></ProtectedRoute>} />
         <Route path="/procurement" element={<ProtectedRoute><Procurement /></ProtectedRoute>} />
