@@ -1,10 +1,28 @@
+# Web Framework & Server
 fastapi
-uvicorn
+uvicorn[standard]
+
+# Database & ORM
 sqlalchemy
 psycopg2-binary
-python-jose
+
+# Security & Auth
+python-jose[cryptography]
 passlib[argon2]
 python-multipart
 email-validator
-pydantic
+
+# Data & Integration
+pandas
 requests
+qrcode
+
+# Configuration & Utilities
+pydantic
+pydantic-settings
+python-dotenv
+loguru
+
+# Testing
+pytest
+httpx
