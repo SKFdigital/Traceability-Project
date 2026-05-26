@@ -1,3 +1,4 @@
+```python
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
@@ -9,12 +10,12 @@ import io
 import re
 import math
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 router = APIRouter()
 
 # =========================================================
-# SHEET CONFIGURATION
+# CONFIG
 # =========================================================
 
 TRB_LINE_SHEETS = ["T3", "T4", "T5", "T6"]
@@ -38,57 +39,48 @@ TRACEABILITY_SHEETS = [
 # =========================================================
 
 def normalize_text(value):
+
     if pd.isna(value):
         return ""
+
     return str(value).strip()
+
 
 def clean_nan(value):
 
-    if value is None:
-        return None
-
     try:
+
         if pd.isna(value):
             return None
+
     except:
         pass
 
     return value
 
-def extract_base_mo(mo):
-    """
-    Intelligent MO normalization.
 
-    Handles:
-    - IM / OM removal
-    - bearing variants
-    - grease variants
-    - sealing variants
-    """
+def extract_base_mo(mo):
 
     if not mo:
         return ""
 
     mo = str(mo).upper().strip()
 
-    # remove spaces
     mo = mo.replace(" ", "")
 
-    # remove IM / OM
     mo = re.sub(r'IM|OM', '', mo)
 
-    # keep first major bearing family
-    match = re.search(r'([A-Z0-9]+[0-9]{3,})', mo)
+    match = re.search(r'(M0[A-Z0-9]+)', mo)
 
-    if match:
-        base = match.group(1)
+    if not match:
+        return mo
 
-        # trim after variant symbols
-        base = re.split(r'[-/]', base)[0]
+    base = match.group(1)
 
-        return base
+    base = re.split(r'[-/]', base)[0]
 
-    return mo
+    return base
+
 
 def parse_date_safe(value):
 
@@ -110,19 +102,10 @@ def parse_date_safe(value):
 
 def within_date_window(date1, date2, days=30):
 
-    if date1 is None or date2 is None:
+    if not date1 or not date2:
         return False
 
     try:
-
-        if pd.isna(date1) or pd.isna(date2):
-            return False
-
-        if isinstance(date1, pd.Timestamp):
-            date1 = date1.date()
-
-        if isinstance(date2, pd.Timestamp):
-            date2 = date2.date()
 
         diff = abs((date1 - date2).days)
 
@@ -133,6 +116,7 @@ def within_date_window(date1, date2, days=30):
 
 
 def download_excel(url):
+
     response = requests.get(url)
 
     if response.status_code != 200:
@@ -140,11 +124,9 @@ def download_excel(url):
 
     return io.BytesIO(response.content)
 
-# =========================================================
-# LOAD EXCEL FILES
-# =========================================================
 
 def load_excel_sheets(url):
+
     excel_data = download_excel(url)
 
     xls = pd.ExcelFile(excel_data)
@@ -152,7 +134,9 @@ def load_excel_sheets(url):
     sheets = {}
 
     for sheet in xls.sheet_names:
+
         try:
+
             df = pd.read_excel(xls, sheet_name=sheet)
 
             df.columns = [str(col).strip() for col in df.columns]
@@ -160,337 +144,391 @@ def load_excel_sheets(url):
             sheets[sheet] = df
 
         except Exception as e:
-            print(f"Failed sheet {sheet}: {e}")
+
+            print(f"Failed Sheet {sheet}: {e}")
 
     return sheets
 
 # =========================================================
-# JOBWORK PARSER
+# ALL MO MASTER
 # =========================================================
 
-def parse_jobwork_data(sheets, target_mo):
-
-    matched = []
-
-    for sheet_name, df in sheets.items():
-
-        if "PO / PR No." not in df.columns:
-            continue
-
-        for _, row in df.iterrows():
-
-            mo = normalize_text(row.get("PO / PR No."))
-
-            normalized = extract_base_mo(mo)
-
-            if normalized != target_mo:
-                continue
-
-            matched.append({
-                "source": "JOBWORK",
-                "sheet": sheet_name,
-                "date": parse_date_safe(row.get("JW Challan Date")),
-                "close_date": parse_date_safe(row.get("Last Challan Date")),
-                "mo": mo,
-                "normalized_mo": normalized,
-                "challan_no": normalize_text(row.get("JW Challan No.")),
-                "job_worker": normalize_text(row.get("Job Worker (JW)")),
-                "qty_approved": row.get("Qty Approved"),
-                "qty_returned": row.get("Qty Returned"),
-                "status": normalize_text(row.get("Current Status")),
-                "department": normalize_text(row.get("Department")),
-            })
-
-    return matched
-
-# =========================================================
-# TRB PARSER
-# =========================================================
-
-def parse_trb_data(sheets, target_mo, reference_dates):
-
-    matched = []
-
-    for sheet_name, df in sheets.items():
-
-        if sheet_name not in TRB_LINE_SHEETS:
-            continue
-
-        if "MO" not in df.columns:
-            continue
-
-        for _, row in df.iterrows():
-
-            mo = normalize_text(row.get("MO"))
-
-            normalized = extract_base_mo(mo)
-
-            if target_mo not in normalized and normalized not in target_mo:
-                continue
-
-            row_date = parse_date_safe(row.get("Date"))
-
-            valid_date = False
-
-            for ref_date in reference_dates:
-                if within_date_window(ref_date, row_date):
-                    valid_date = True
-                    break
-
-            if not valid_date and reference_dates:
-                continue
-
-            matched.append({
-                "source": "TRB",
-                "sheet": sheet_name,
-                "channel": sheet_name,
-                "date": row_date,
-                "shift": row.get("Shift"),
-                "mo": mo,
-                "normalized_mo": normalized,
-                "production": row.get("Production"),
-                "cumulative_production": row.get("Cumulative production"),
-                "towards_packaging": row.get("Towards Packaging"),
-                "next_station": row.get("Next_Station"),
-                "remark": normalize_text(row.get("Remark")),
-            })
-
-    return matched
-
-# =========================================================
-# DGBB PARSER
-# =========================================================
-
-def parse_dgbb_data(sheets, target_mo, reference_dates):
-
-    matched = []
-
-    target_prefix = target_mo[:4]
-
-    for sheet_name, df in sheets.items():
-
-        if sheet_name not in DGBB_LINE_SHEETS:
-            continue
-
-        if "MO" not in df.columns:
-            continue
-
-        for _, row in df.iterrows():
-
-            mo = normalize_text(row.get("MO"))
-
-            normalized = extract_base_mo(mo)
-
-            if not normalized.startswith(target_prefix):
-                continue
-
-            row_date = parse_date_safe(row.get("Date"))
-
-            valid_date = False
-
-            for ref_date in reference_dates:
-                if within_date_window(ref_date, row_date):
-                    valid_date = True
-                    break
-
-            if not valid_date and reference_dates:
-                continue
-
-            matched.append({
-                "source": "DGBB",
-                "sheet": sheet_name,
-                "channel": sheet_name,
-                "date": row_date,
-                "shift": clean_nan(row.get("Shift")),
-                "mo": mo,
-                "normalized_mo": normalized,
-                "production": clean_nan(row.get("Production")),
-                "cumulative_production": clean_nan(row.get("Cumulative production")),
-                "towards_packaging": clean_nan(row.get("Towards Packaging")),
-                "next_station": row.get("Next_Station"),
-                "remark": normalize_text(row.get("Remark")),
-            })
-
-    return matched
-
-# =========================================================
-# TRACEABILITY PARSER
-# =========================================================
-
-def parse_traceability_data(sheets, target_mo):
-
-    matched = []
-
-    for sheet_name, df in sheets.items():
-
-        if sheet_name not in TRACEABILITY_SHEETS:
-            continue
-
-        if "MO" not in df.columns:
-            continue
-
-        for _, row in df.iterrows():
-
-            mo = normalize_text(row.get("MO"))
-
-            normalized = extract_base_mo(mo)
-
-            if target_mo not in normalized and normalized not in target_mo:
-                continue
-
-            matched.append({
-                "source": "TRACEABILITY",
-                "sheet": sheet_name,
-                "date": parse_date_safe(row.get("Date")),
-                "source_channel": normalize_text(row.get("Source Channel")),
-                "production": row.get("Production"),
-                "next_station": row.get("Next_Station"),
-                "remark": normalize_text(row.get("Remark")),
-            })
-
-    return matched
-
-# =========================================================
-# MAIN TRACEABILITY ROUTE
-# =========================================================
-@router.get("/traceability_report/{mo_number}")
-def get_traceability_history(mo_number: str, db: Session = Depends(get_db)):
+@router.get("/traceability_all_mos")
+def get_all_traceability_mos():
 
     try:
 
-        print("TRACEABILITY API CALLED")
-        print("INPUT MO:", mo_number)
+        final_records = {}
 
-        normalized_target = extract_base_mo(mo_number)
-
-        print("NORMALIZED MO:", normalized_target)
-
-        # -------------------------------------------------
-        # LOAD FILES
-        # -------------------------------------------------
-
-        print("LOADING JOBWORK")
-        jobwork_sheets = load_excel_sheets(settings.JOBWORK_REPORT_URL)
-
-        print("LOADING TRB")
-        trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
-
-        print("LOADING DGBB")
-        dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
-
-        print("LOADING TRACEABILITY")
-        trace_sheets = load_excel_sheets(settings.TRACEABILITY_MASTER_URL)
-
-        print("FILES LOADED SUCCESSFULLY")
-
-        # -------------------------------------------------
+        # =================================================
         # JOBWORK
-        # -------------------------------------------------
+        # =================================================
 
-        print("PARSING JOBWORK")
-
-        jobwork_data = parse_jobwork_data(
-            jobwork_sheets,
-            normalized_target
+        jobwork_sheets = load_excel_sheets(
+            settings.JOBWORK_REPORT_URL
         )
 
-        print("JOBWORK RECORDS:", len(jobwork_data))
+        for sheet_name, df in jobwork_sheets.items():
 
-        reference_dates = []
+            if "PO / PR No." not in df.columns:
+                continue
 
-        for row in jobwork_data:
-            if row["date"]:
-                reference_dates.append(row["date"])
+            for _, row in df.iterrows():
 
-        # -------------------------------------------------
+                raw_mo = normalize_text(
+                    row.get("PO / PR No.")
+                )
+
+                normalized = extract_base_mo(raw_mo)
+
+                if not normalized:
+                    continue
+
+                if normalized not in final_records:
+
+                    final_records[normalized] = {
+                        "mo": normalized,
+                        "stages": [],
+                        "total_output": 0,
+                        "latest_date": None
+                    }
+
+                final_records[normalized]["stages"].append({
+                    "stage": "SHO",
+                    "department": "SHO",
+                    "in_date": parse_date_safe(
+                        row.get("JW Challan Date")
+                    ),
+                    "out_date": parse_date_safe(
+                        row.get("Last Challan Date")
+                    ),
+                    "quantity": clean_nan(
+                        row.get("Qty Approved")
+                    ),
+                    "returned_qty": clean_nan(
+                        row.get("Qty Returned")
+                    ),
+                    "status": normalize_text(
+                        row.get("Current Status")
+                    )
+                })
+
+        # =================================================
         # TRB
-        # -------------------------------------------------
+        # =================================================
 
-        print("PARSING TRB")
-
-        trb_data = parse_trb_data(
-            trb_sheets,
-            normalized_target,
-            reference_dates
+        trb_sheets = load_excel_sheets(
+            settings.TRB_MASTER_URL
         )
 
-        print("TRB RECORDS:", len(trb_data))
+        for sheet_name, df in trb_sheets.items():
 
-        # -------------------------------------------------
+            if sheet_name not in TRB_LINE_SHEETS:
+                continue
+
+            if "MOType" not in df.columns:
+                continue
+
+            for _, row in df.iterrows():
+
+                raw_mo = normalize_text(
+                    row.get("MOType")
+                )
+
+                normalized = extract_base_mo(raw_mo)
+
+                if not normalized:
+                    continue
+
+                if normalized not in final_records:
+
+                    final_records[normalized] = {
+                        "mo": normalized,
+                        "stages": [],
+                        "total_output": 0,
+                        "latest_date": None
+                    }
+
+                production = clean_nan(
+                    row.get("Production")
+                )
+
+                cumulative = clean_nan(
+                    row.get("Cumulative production")
+                )
+
+                final_records[normalized]["stages"].append({
+
+                    "stage": "TRB",
+
+                    "department": sheet_name,
+
+                    "channel": sheet_name,
+
+                    "date": parse_date_safe(
+                        row.get("Date")
+                    ),
+
+                    "shift": clean_nan(
+                        row.get("Shift")
+                    ),
+
+                    "production": production,
+
+                    "cumulative_production": cumulative,
+
+                    "towards_packaging": clean_nan(
+                        row.get("Towards Packaging")
+                    ),
+
+                    "end_buffer": clean_nan(
+                        row.get("END Buffer")
+                    ),
+
+                    "next_station": normalize_text(
+                        row.get("Next_Station")
+                    ),
+
+                    "remark": normalize_text(
+                        row.get("Remark")
+                    ),
+
+                    "tag_type": normalize_text(
+                        row.get("Tag Type")
+                    ),
+
+                    "packaging_details": normalize_text(
+                        row.get("Packaging Details")
+                    )
+                })
+
+        # =================================================
         # DGBB
-        # -------------------------------------------------
+        # =================================================
 
-        print("PARSING DGBB")
-
-        dgbb_data = parse_dgbb_data(
-            dgbb_sheets,
-            normalized_target,
-            reference_dates
+        dgbb_sheets = load_excel_sheets(
+            settings.DGBB_MASTER_URL
         )
 
-        print("DGBB RECORDS:", len(dgbb_data))
+        for sheet_name, df in dgbb_sheets.items():
 
-        # -------------------------------------------------
+            if sheet_name not in DGBB_LINE_SHEETS:
+                continue
+
+            if "MOType" not in df.columns:
+                continue
+
+            for _, row in df.iterrows():
+
+                raw_mo = normalize_text(
+                    row.get("MOType")
+                )
+
+                normalized = extract_base_mo(raw_mo)
+
+                if not normalized:
+                    continue
+
+                if normalized not in final_records:
+
+                    final_records[normalized] = {
+                        "mo": normalized,
+                        "stages": [],
+                        "total_output": 0,
+                        "latest_date": None
+                    }
+
+                final_records[normalized]["stages"].append({
+
+                    "stage": "DGBB",
+
+                    "department": sheet_name,
+
+                    "channel": sheet_name,
+
+                    "date": parse_date_safe(
+                        row.get("Date")
+                    ),
+
+                    "shift": clean_nan(
+                        row.get("Shift")
+                    ),
+
+                    "production": clean_nan(
+                        row.get("Production")
+                    ),
+
+                    "cumulative_production": clean_nan(
+                        row.get("Cumulative production")
+                    ),
+
+                    "towards_packaging": clean_nan(
+                        row.get("Towards Packaging")
+                    ),
+
+                    "next_station": normalize_text(
+                        row.get("Next_Station")
+                    ),
+
+                    "remark": normalize_text(
+                        row.get("Remark")
+                    )
+                })
+
+        # =================================================
         # TRACEABILITY
-        # -------------------------------------------------
+        # =================================================
 
-        print("PARSING TRACEABILITY")
-
-        traceability_data = parse_traceability_data(
-            trace_sheets,
-            normalized_target
+        trace_sheets = load_excel_sheets(
+            settings.TRACEABILITY_MASTER_URL
         )
 
-        print("TRACEABILITY RECORDS:", len(traceability_data))
+        for sheet_name, df in trace_sheets.items():
 
-        # -------------------------------------------------
-        # FINAL TIMELINE
-        # -------------------------------------------------
+            if sheet_name not in TRACEABILITY_SHEETS:
+                continue
 
-        timeline = (
-            jobwork_data +
-            trb_data +
-            dgbb_data +
-            traceability_data
+            if "MOType" not in df.columns:
+                continue
+
+            for _, row in df.iterrows():
+
+                raw_mo = normalize_text(
+                    row.get("MOType")
+                )
+
+                normalized = extract_base_mo(raw_mo)
+
+                if not normalized:
+                    continue
+
+                if normalized not in final_records:
+
+                    final_records[normalized] = {
+                        "mo": normalized,
+                        "stages": [],
+                        "total_output": 0,
+                        "latest_date": None
+                    }
+
+                production = clean_nan(
+                    row.get("Production")
+                )
+
+                final_records[normalized]["stages"].append({
+
+                    "stage": "CHANNEL OUT",
+
+                    "department": "PACKAGING",
+
+                    "channel": normalize_text(
+                        row.get("Source Channel")
+                    ),
+
+                    "date": parse_date_safe(
+                        row.get("Date")
+                    ),
+
+                    "shift": clean_nan(
+                        row.get("Shift")
+                    ),
+
+                    "output_quantity": production,
+
+                    "remark": normalize_text(
+                        row.get("Remark")
+                    )
+                })
+
+                if production:
+
+                    current = final_records[
+                        normalized
+                    ]["total_output"]
+
+                    final_records[
+                        normalized
+                    ]["total_output"] = current + production
+
+        # =================================================
+        # FINAL SUMMARY
+        # =================================================
+
+        response = []
+
+        for mo, details in final_records.items():
+
+            stages = details["stages"]
+
+            latest_date = None
+
+            for s in stages:
+
+                d = s.get("date")
+
+                if d:
+
+                    if not latest_date or d > latest_date:
+                        latest_date = d
+
+            response.append({
+
+                "mo": mo,
+
+                "total_stages": len(stages),
+
+                "latest_activity": latest_date,
+
+                "total_output": details["total_output"],
+
+                "stages": stages
+            })
+
+        response.sort(
+            key=lambda x: x.get("latest_activity")
+            or datetime.min.date(),
+            reverse=True
         )
-
-        timeline.sort(
-            key=lambda x: x.get("date") or datetime.min.date()
-        )
-
-        print("FINAL TIMELINE:", len(timeline))
-
-        for row in timeline:
-
-            for key, value in row.items():
-
-                try:
-
-                    if isinstance(value, float) and math.isnan(value):
-                        row[key] = None
-
-                except:
-                    pass
 
         return {
             "status": "success",
-            "searched_mo": mo_number,
-            "normalized_mo": normalized_target,
-            "total_records": len(timeline),
-            "timeline": timeline
+            "count": len(response),
+            "data": response
         }
 
     except Exception as e:
-
-        import traceback
-
-        print("============== TRACEABILITY ERROR ==============")
-        print(str(e))
-        print(traceback.format_exc())
-        print("===============================================")
 
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
 
+# =========================================================
+# SINGLE MO DETAIL
+# =========================================================
+
+@router.get("/traceability_report/{mo_number}")
+def get_traceability_history(
+    mo_number: str,
+    db: Session = Depends(get_db)
+):
+
+    all_data = get_all_traceability_mos()
+
+    target = extract_base_mo(mo_number)
+
+    filtered = []
+
+    for row in all_data["data"]:
+
+        if row["mo"] == target:
+
+            filtered.append(row)
+
+    return {
+        "status": "success",
+        "searched_mo": mo_number,
+        "normalized_mo": target,
+        "data": filtered
+    }
+```
