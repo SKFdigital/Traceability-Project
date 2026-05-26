@@ -26,3 +26,11 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
+# 5. Add this function so that traceability_backend.py can import it
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
