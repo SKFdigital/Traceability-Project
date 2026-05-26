@@ -23,6 +23,9 @@
 
 .dashboard-grid {
   display: grid;
+  /* Added max-width to prevent cards from stretching too wide on massive monitors */
+  max-width: 1200px;
+  margin: 0 auto; 
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 25px;
 }
