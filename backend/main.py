@@ -12,6 +12,8 @@ from models import (
 from auth import hash_password, verify_password, create_token
 from schemas import RegisterRequest, LoginRequest
 from order_backend_postgres import router as order_router
+# NEW: Import for the Traceability Module
+from traceability_backend import router as traceability_router
 
 # ================= APP =================
 app = FastAPI(title="AI-Driven SCM Backend API")
@@ -67,6 +69,8 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
 
 # ================= INCLUDE ROUTERS =================
 app.include_router(order_router)
+# NEW: Register the Traceability Module router
+app.include_router(traceability_router)
 
 # ================= OTHER ROUTES (Kept intact) =================
 @app.get("/")
@@ -77,9 +81,7 @@ def root():
 def list_users(db: Session = Depends(get_db)):
     return db.query(User).all()
 
-
-
-# ================= REGISTER =================
+# ================= REGISTER (Duplicate kept) =================
 @app.post("/register")
 def register(data: RegisterRequest, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.email == data.email).first()
@@ -100,7 +102,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 
     return {"message": "User registered successfully", "user_id": user.id}
 
-# ================= LOGIN =================
+# ================= LOGIN (Duplicate kept) =================
 @app.post("/login")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == data.email).first()
