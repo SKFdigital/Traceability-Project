@@ -9,23 +9,13 @@ import io
 import re
 import math
 
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import datetime
 
 router = APIRouter()
 
 # =========================================================
-# CACHE
-# =========================================================
-
-MASTER_CACHE = []
-FLOW_CACHE = {}
-
-LAST_REFRESH = None
-
-CACHE_DURATION_MINUTES = 5
-
-# =========================================================
-# SHEETS
+# CONFIG
 # =========================================================
 
 TRB_LINE_SHEETS = ["T3", "T4", "T5", "T6"]
@@ -50,13 +40,21 @@ TRACEABILITY_SHEETS = [
 
 def normalize_text(value):
 
-    if pd.isna(value):
-        return ""
+    try:
+
+        if pd.isna(value):
+            return ""
+
+    except:
+        pass
 
     return str(value).strip()
 
 
 def clean_nan(value):
+
+    if value is None:
+        return None
 
     try:
 
@@ -76,7 +74,11 @@ def parse_date_safe(value):
         if pd.isna(value):
             return None
 
-        parsed = pd.to_datetime(value, errors='coerce')
+        parsed = pd.to_datetime(
+            value,
+            errors='coerce',
+            dayfirst=True
+        )
 
         if pd.isna(parsed):
             return None
@@ -87,33 +89,53 @@ def parse_date_safe(value):
         return None
 
 
-def extract_bearing_family(text):
+def extract_base_mo(mo):
 
-    if not text:
+    if not mo:
         return ""
 
-    text = str(text).upper()
+    mo = str(mo).upper().strip()
 
-    text = text.replace(" ", "")
+    mo = mo.replace(" ", "")
 
-    text = re.sub(r'IM|OM', '', text)
+    mo = re.sub(r'IM|OM', '', mo)
 
-    match = re.search(r'([0-9]{4,})', text)
+    match = re.search(r'([A-Z0-9]+)', mo)
 
-    if match:
-        return match.group(1)
+    if not match:
+        return mo
 
-    return text[:4]
+    base = match.group(1)
+
+    base = re.split(r'[-/]', base)[0]
+
+    return base
 
 
-def extract_mo_prefix(text):
+def get_dgbb_prefix(mo):
 
-    if not text:
-        return ""
+    mo = extract_base_mo(mo)
 
-    text = str(text).upper().replace(" ", "")
+    return mo[:4]
 
-    return text[:4]
+
+def within_date_window(date1, date2, days=45):
+
+    if not date1 or not date2:
+        return False
+
+    try:
+
+        if isinstance(date1, pd.Timestamp):
+            date1 = date1.date()
+
+        if isinstance(date2, pd.Timestamp):
+            date2 = date2.date()
+
+        return abs((date1 - date2).days) <= days
+
+    except:
+        return False
 
 
 def download_excel(url):
@@ -121,7 +143,7 @@ def download_excel(url):
     response = requests.get(url)
 
     if response.status_code != 200:
-        raise Exception(f"Failed downloading excel")
+        raise Exception(f"Failed to download Excel: {url}")
 
     return io.BytesIO(response.content)
 
@@ -140,195 +162,103 @@ def load_excel_sheets(url):
 
             df = pd.read_excel(xls, sheet_name=sheet)
 
-            df.columns = [str(c).strip() for c in df.columns]
+            df.columns = [str(col).strip() for col in df.columns]
 
             sheets[sheet] = df
 
         except Exception as e:
 
-            print("FAILED SHEET:", sheet, str(e))
+            print(f"FAILED SHEET {sheet}: {e}")
 
     return sheets
 
-
 # =========================================================
-# CACHE REFRESH
+# JOBWORK PARSER
 # =========================================================
 
-def refresh_cache():
+def parse_jobwork_data(sheets):
 
-    global MASTER_CACHE
-    global FLOW_CACHE
-    global LAST_REFRESH
+    records = []
 
-    print("REFRESHING TRACEABILITY CACHE")
-
-    MASTER_CACHE = []
-    FLOW_CACHE = {}
-
-    # -----------------------------------------------------
-    # LOAD FILES
-    # -----------------------------------------------------
-
-    jobwork_sheets = load_excel_sheets(
-        settings.JOBWORK_REPORT_URL
-    )
-
-    trb_sheets = load_excel_sheets(
-        settings.TRB_MASTER_URL
-    )
-
-    dgbb_sheets = load_excel_sheets(
-        settings.DGBB_MASTER_URL
-    )
-
-    trace_sheets = load_excel_sheets(
-        settings.TRACEABILITY_MASTER_URL
-    )
-
-    # =====================================================
-    # MASTER OBJECT
-    # =====================================================
-
-    mo_map = {}
-
-    # =====================================================
-    # JOBWORK
-    # =====================================================
-
-    for sheet_name, df in jobwork_sheets.items():
+    for sheet_name, df in sheets.items():
 
         if "PO / PR No." not in df.columns:
             continue
 
         for _, row in df.iterrows():
 
-            mo = normalize_text(
-                row.get("PO / PR No.")
-            )
+            mo = normalize_text(row.get("PO / PR No."))
 
-            family = extract_bearing_family(mo)
+            if not mo:
+                continue
 
-            if family not in mo_map:
+            normalized = extract_base_mo(mo)
 
-                mo_map[family] = {
-                    "mo": mo,
-                    "family": family,
-                    "start_date": None,
-                    "end_date": None,
-                    "sho_qty": 0,
-                    "transit_qty": 0,
-                    "channel_qty": 0,
-                    "output_qty": 0,
-                    "status": "Running",
-                    "channel": "",
-                    "stages": []
-                }
+            records.append({
 
-            date = parse_date_safe(
-                row.get("JW Challan Date")
-            )
-
-            close_date = parse_date_safe(
-                row.get("Last Challan Date")
-            )
-
-            qty_approved = clean_nan(
-                row.get("Qty Approved")
-            ) or 0
-
-            qty_returned = clean_nan(
-                row.get("Qty Returned")
-            ) or 0
-
-            ring_name = normalize_text(
-                row.get("Product")
-            )
-
-            # SHO
-            mo_map[family]["stages"].append({
-
-                "stage": "SHO",
-
-                "date": str(date) if date else "",
-
+                "source": "JOBWORK",
+                "sheet": sheet_name,
                 "department": "SHO",
 
-                "ring_name": ring_name,
+                "date": parse_date_safe(
+                    row.get("JW Challan Date")
+                ),
 
-                "channel": "",
+                "close_date": parse_date_safe(
+                    row.get("Last Challan Date")
+                ),
 
-                "production": qty_approved,
+                "mo": mo,
+                "normalized_mo": normalized,
 
-                "cumulative_production": "",
+                "challan_no": normalize_text(
+                    row.get("JW Challan No.")
+                ),
 
-                "quantity": qty_approved,
+                "job_worker": normalize_text(
+                    row.get("Job Worker (JW)")
+                ),
 
-                "returned_qty": "",
+                "ring_type": normalize_text(
+                    row.get("Challan Type(Indirect & Direct Material)")
+                ),
 
-                "output_quantity": "",
+                "product": normalize_text(
+                    row.get("Product")
+                ),
 
-                "towards_packaging": "",
+                "qty_sent": clean_nan(
+                    row.get("Qty Sent")
+                ),
 
-                "end_buffer": "",
+                "qty_approved": clean_nan(
+                    row.get("Qty Approved")
+                ),
 
-                "next_station": "Transit Buffer",
+                "qty_returned": clean_nan(
+                    row.get("Qty Returned")
+                ),
+
+                "difference_balance_qty": clean_nan(
+                    row.get("Difference Balance Qty")
+                ),
 
                 "status": normalize_text(
                     row.get("Current Status")
                 ),
-
-                "remark": normalize_text(
-                    row.get("Challan Type(Indirect & Direct Material)")
-                )
             })
 
-            # TRANSIT
-            mo_map[family]["stages"].append({
+    return records
 
-                "stage": "Transit Buffer",
+# =========================================================
+# TRB PARSER
+# =========================================================
 
-                "date": str(close_date) if close_date else "",
+def parse_trb_data(sheets):
 
-                "department": "Transit Buffer",
+    records = []
 
-                "ring_name": ring_name,
-
-                "channel": "",
-
-                "production": qty_returned,
-
-                "cumulative_production": "",
-
-                "quantity": "",
-
-                "returned_qty": qty_returned,
-
-                "output_quantity": "",
-
-                "towards_packaging": "",
-
-                "end_buffer": "",
-
-                "next_station": "Channel",
-
-                "status": "Returned",
-
-                "remark": ""
-            })
-
-            mo_map[family]["sho_qty"] += qty_approved
-
-            mo_map[family]["transit_qty"] += qty_returned
-
-            if not mo_map[family]["start_date"]:
-                mo_map[family]["start_date"] = str(date)
-
-    # =====================================================
-    # TRB
-    # =====================================================
-
-    for sheet_name, df in trb_sheets.items():
+    for sheet_name, df in sheets.items():
 
         if sheet_name not in TRB_LINE_SHEETS:
             continue
@@ -338,81 +268,65 @@ def refresh_cache():
 
         for _, row in df.iterrows():
 
-            mo = normalize_text(
-                row.get("MO")
-            )
+            mo = normalize_text(row.get("MO"))
 
-            family = extract_bearing_family(mo)
-
-            if family not in mo_map:
+            if not mo:
                 continue
 
-            production = clean_nan(
-                row.get("Production")
-            ) or 0
+            normalized = extract_base_mo(mo)
 
-            cumulative = clean_nan(
-                row.get("Cumulative production")
-            ) or 0
+            records.append({
 
-            mo_map[family]["channel"] = "TRB"
+                "source": "TRB",
+                "sheet": sheet_name,
+                "department": "CHANNEL",
+                "channel": "TRB",
 
-            mo_map[family]["channel_qty"] += production
-
-            mo_map[family]["stages"].append({
-
-                "stage": "TRB",
-
-                "date": str(
-                    parse_date_safe(row.get("Date"))
+                "date": parse_date_safe(
+                    row.get("Date")
                 ),
-
-                "department": "TRB",
-
-                "ring_name": mo,
-
-                "channel": sheet_name,
 
                 "shift": clean_nan(
                     row.get("Shift")
                 ),
 
-                "production": production,
+                "mo": mo,
+                "normalized_mo": normalized,
 
-                "cumulative_production": cumulative,
+                "production": clean_nan(
+                    row.get("Production")
+                ),
 
-                "quantity": "",
-
-                "returned_qty": "",
-
-                "output_quantity": "",
+                "cumulative_production": clean_nan(
+                    row.get("Cumulative production")
+                ),
 
                 "towards_packaging": clean_nan(
                     row.get("Towards Packaging")
-                ),
-
-                "end_buffer": clean_nan(
-                    row.get("END Buffer")
                 ),
 
                 "next_station": normalize_text(
                     row.get("Next_Station")
                 ),
 
-                "status": normalize_text(
+                "remark": normalize_text(
                     row.get("Remark")
                 ),
 
-                "remark": normalize_text(
-                    row.get("Remark")
-                )
+                "variant_name": mo
             })
 
-    # =====================================================
-    # DGBB
-    # =====================================================
+    return records
 
-    for sheet_name, df in dgbb_sheets.items():
+# =========================================================
+# DGBB PARSER
+# =========================================================
+
+def parse_dgbb_data(sheets):
+
+    records = []
+
+    for sheet_name, df in sheets.items():
 
         if sheet_name not in DGBB_LINE_SHEETS:
             continue
@@ -422,93 +336,67 @@ def refresh_cache():
 
         for _, row in df.iterrows():
 
-            mo = normalize_text(
-                row.get("MO")
-            )
+            mo = normalize_text(row.get("MO"))
 
-            prefix = extract_mo_prefix(mo)
-
-            matched_family = None
-
-            for family, obj in mo_map.items():
-
-                original_mo = extract_mo_prefix(
-                    obj["mo"]
-                )
-
-                if original_mo == prefix:
-                    matched_family = family
-                    break
-
-            if not matched_family:
+            if not mo:
                 continue
 
-            production = clean_nan(
-                row.get("Production")
-            ) or 0
+            normalized = extract_base_mo(mo)
 
-            cumulative = clean_nan(
-                row.get("Cumulative production")
-            ) or 0
+            records.append({
 
-            mo_map[matched_family]["channel"] = "DGBB"
+                "source": "DGBB",
+                "sheet": sheet_name,
+                "department": "CHANNEL",
+                "channel": "DGBB",
 
-            mo_map[matched_family]["channel_qty"] += production
-
-            mo_map[matched_family]["stages"].append({
-
-                "stage": "DGBB",
-
-                "date": str(
-                    parse_date_safe(row.get("Date"))
+                "date": parse_date_safe(
+                    row.get("Date")
                 ),
-
-                "department": "DGBB",
-
-                "ring_name": mo,
-
-                "channel": sheet_name,
 
                 "shift": clean_nan(
                     row.get("Shift")
                 ),
 
-                "production": production,
+                "mo": mo,
+                "normalized_mo": normalized,
 
-                "cumulative_production": cumulative,
+                "dgbb_prefix": get_dgbb_prefix(normalized),
 
-                "quantity": "",
+                "production": clean_nan(
+                    row.get("Production")
+                ),
 
-                "returned_qty": "",
-
-                "output_quantity": "",
+                "cumulative_production": clean_nan(
+                    row.get("Cumulative production")
+                ),
 
                 "towards_packaging": clean_nan(
                     row.get("Towards Packaging")
-                ),
-
-                "end_buffer": clean_nan(
-                    row.get("END Buffer")
                 ),
 
                 "next_station": normalize_text(
                     row.get("Next_Station")
                 ),
 
-                "status": normalize_text(
+                "remark": normalize_text(
                     row.get("Remark")
                 ),
 
-                "remark": normalize_text(
-                    row.get("Remark")
-                )
+                "variant_name": mo
             })
 
-    # =====================================================
-    # TRACEABILITY OUTPUT
-    # =====================================================
+    return records
 
-    for sheet_name, df in trace_sheets.items():
+# =========================================================
+# TRACEABILITY PARSER
+# =========================================================
+
+def parse_traceability_data(sheets):
+
+    records = []
+
+    for sheet_name, df in sheets.items():
 
         if sheet_name not in TRACEABILITY_SHEETS:
             continue
@@ -518,196 +406,439 @@ def refresh_cache():
 
         for _, row in df.iterrows():
 
-            mo = normalize_text(
-                row.get("MO")
-            )
+            mo = normalize_text(row.get("MO"))
 
-            family = extract_bearing_family(mo)
-
-            if family not in mo_map:
+            if not mo:
                 continue
 
-            production = clean_nan(
-                row.get("Production")
-            ) or 0
+            normalized = extract_base_mo(mo)
 
-            mo_map[family]["output_qty"] += production
+            records.append({
 
-            end_date = parse_date_safe(
-                row.get("Date")
-            )
+                "source": "TRACEABILITY",
+                "sheet": sheet_name,
+                "department": "CHANNEL OUT",
 
-            mo_map[family]["end_date"] = str(end_date)
+                "date": parse_date_safe(
+                    row.get("Date")
+                ),
 
-            mo_map[family]["stages"].append({
+                "mo": mo,
+                "normalized_mo": normalized,
 
-                "stage": "Channel Output",
-
-                "date": str(end_date),
-
-                "department": "Packaging",
-
-                "ring_name": mo,
-
-                "channel": normalize_text(
+                "source_channel": normalize_text(
                     row.get("Source Channel")
                 ),
 
-                "shift": clean_nan(
-                    row.get("Shift")
+                "production": clean_nan(
+                    row.get("Production")
                 ),
 
-                "production": production,
-
-                "cumulative_production": clean_nan(
-                    row.get("Cumulative production")
-                ),
-
-                "quantity": "",
-
-                "returned_qty": "",
-
-                "output_quantity": production,
-
-                "towards_packaging": "",
-
-                "end_buffer": "",
-
-                "next_station": "FG Store",
-
-                "status": normalize_text(
-                    row.get("Remark")
+                "next_station": normalize_text(
+                    row.get("Next_Station")
                 ),
 
                 "remark": normalize_text(
                     row.get("Remark")
-                )
+                ),
             })
 
-    # =====================================================
-    # FINALIZE
-    # =====================================================
+    return records
 
-    for family, obj in mo_map.items():
+# =========================================================
+# BUILD MASTER
+# =========================================================
 
-        obj["total_stages"] = len(
-            obj["stages"]
+def build_mo_master(
+    jobwork_records,
+    trb_records,
+    dgbb_records,
+    traceability_records
+):
+
+    grouped = defaultdict(list)
+
+    # -----------------------------------------------------
+    # JOBWORK
+    # -----------------------------------------------------
+
+    for row in jobwork_records:
+
+        grouped[row["normalized_mo"]].append(row)
+
+    # -----------------------------------------------------
+    # TRB MATCH
+    # -----------------------------------------------------
+
+    for trb in trb_records:
+
+        matched = False
+
+        for mo, rows in grouped.items():
+
+            for jr in rows:
+
+                if jr["source"] != "JOBWORK":
+                    continue
+
+                if (
+                    mo in trb["normalized_mo"]
+                    or trb["normalized_mo"] in mo
+                ):
+
+                    if within_date_window(
+                        jr.get("date"),
+                        trb.get("date"),
+                        45
+                    ):
+
+                        grouped[mo].append(trb)
+                        matched = True
+                        break
+
+            if matched:
+                break
+
+    # -----------------------------------------------------
+    # DGBB MATCH
+    # -----------------------------------------------------
+
+    for dgbb in dgbb_records:
+
+        matched = False
+
+        dgbb_prefix = dgbb.get("dgbb_prefix")
+
+        for mo, rows in grouped.items():
+
+            if not mo.startswith(dgbb_prefix):
+                continue
+
+            for jr in rows:
+
+                if jr["source"] != "JOBWORK":
+                    continue
+
+                if within_date_window(
+                    jr.get("date"),
+                    dgbb.get("date"),
+                    45
+                ):
+
+                    grouped[mo].append(dgbb)
+                    matched = True
+                    break
+
+            if matched:
+                break
+
+    # -----------------------------------------------------
+    # TRACEABILITY MATCH
+    # -----------------------------------------------------
+
+    for trace in traceability_records:
+
+        matched = False
+
+        for mo, rows in grouped.items():
+
+            for jr in rows:
+
+                if jr["source"] != "JOBWORK":
+                    continue
+
+                if (
+                    mo in trace["normalized_mo"]
+                    or trace["normalized_mo"] in mo
+                ):
+
+                    if within_date_window(
+                        jr.get("date"),
+                        trace.get("date"),
+                        60
+                    ):
+
+                        grouped[mo].append(trace)
+                        matched = True
+                        break
+
+            if matched:
+                break
+
+    # -----------------------------------------------------
+    # BUILD SUMMARY
+    # -----------------------------------------------------
+
+    master = []
+
+    for mo, rows in grouped.items():
+
+        rows.sort(
+            key=lambda x: (
+                x.get("date") or datetime.min.date(),
+                str(x.get("source", ""))
+            )
         )
 
-        obj["latest_activity"] = (
-            obj["end_date"]
-            or obj["start_date"]
-        )
+        jobwork_rows = [
+            x for x in rows
+            if x["source"] == "JOBWORK"
+        ]
 
-        obj["stages"].sort(
-            key=lambda x: x.get("date") or ""
-        )
+        trb_rows = [
+            x for x in rows
+            if x["source"] == "TRB"
+        ]
 
-        MASTER_CACHE.append({
+        dgbb_rows = [
+            x for x in rows
+            if x["source"] == "DGBB"
+        ]
 
-            "mo": obj["mo"],
+        trace_rows = [
+            x for x in rows
+            if x["source"] == "TRACEABILITY"
+        ]
 
-            "family": obj["family"],
+        all_dates = [
+            x.get("date")
+            for x in rows
+            if x.get("date")
+        ]
 
-            "start_date": obj["start_date"],
+        start_date = None
+        end_date = None
 
-            "end_date": obj["end_date"],
+        if all_dates:
 
-            "sho_qty": obj["sho_qty"],
+            start_date = min(all_dates)
 
-            "transit_qty": obj["transit_qty"],
+            end_date = max(all_dates)
 
-            "channel": obj["channel"],
+        approved_qty = sum([
+            x.get("qty_approved") or 0
+            for x in jobwork_rows
+        ])
 
-            "channel_qty": obj["channel_qty"],
+        returned_qty = sum([
+            x.get("qty_returned") or 0
+            for x in jobwork_rows
+        ])
 
-            "output_qty": obj["output_qty"],
+        trb_qty = sum([
+            x.get("production") or 0
+            for x in trb_rows
+        ])
 
-            "status": obj["status"],
+        dgbb_qty = sum([
+            x.get("production") or 0
+            for x in dgbb_rows
+        ])
 
-            "total_stages": obj["total_stages"],
+        output_qty = sum([
+            x.get("production") or 0
+            for x in trace_rows
+        ])
 
-            "latest_activity": obj["latest_activity"]
+        channels = []
+
+        if trb_rows:
+            channels.append("TRB")
+
+        if dgbb_rows:
+            channels.append("DGBB")
+
+        ring_names = list(set([
+            normalize_text(x.get("product"))
+            for x in jobwork_rows
+            if x.get("product")
+        ]))
+
+        master.append({
+
+            "mo": mo,
+
+            "start_date": start_date,
+
+            "end_date": end_date,
+
+            "approved_qty": approved_qty,
+
+            "returned_qty": returned_qty,
+
+            "channel_qty": trb_qty + dgbb_qty,
+
+            "output_qty": output_qty,
+
+            "channels": ", ".join(channels),
+
+            "ring_names": ring_names,
+
+            "records": len(rows),
+
+            "status": (
+                "Completed"
+                if output_qty > 0
+                else "Running"
+            )
         })
 
-        FLOW_CACHE[obj["mo"]] = obj
-
-    LAST_REFRESH = datetime.now()
-
-    print("CACHE REFRESH DONE")
-
+    return master, grouped
 
 # =========================================================
-# ENSURE CACHE
+# CACHE
 # =========================================================
 
-def ensure_cache():
-
-    global LAST_REFRESH
-
-    if LAST_REFRESH is None:
-        refresh_cache()
-        return
-
-    diff = datetime.now() - LAST_REFRESH
-
-    if diff > timedelta(
-        minutes=CACHE_DURATION_MINUTES
-    ):
-        refresh_cache()
-
+MASTER_CACHE = None
+FLOW_CACHE = None
 
 # =========================================================
 # MASTER API
 # =========================================================
 
-@router.get("/traceability_all_mos")
-def get_all_mos():
+@router.get("/traceability_master")
+def get_traceability_master(
+    db: Session = Depends(get_db)
+):
+
+    global MASTER_CACHE
+    global FLOW_CACHE
 
     try:
 
-        ensure_cache()
+        if MASTER_CACHE is not None:
+
+            return {
+                "status": "success",
+                "total_mo": len(MASTER_CACHE),
+                "data": MASTER_CACHE
+            }
+
+        print("LOADING FILES")
+
+        jobwork_sheets = load_excel_sheets(
+            settings.JOBWORK_REPORT_URL
+        )
+
+        trb_sheets = load_excel_sheets(
+            settings.TRB_MASTER_URL
+        )
+
+        dgbb_sheets = load_excel_sheets(
+            settings.DGBB_MASTER_URL
+        )
+
+        trace_sheets = load_excel_sheets(
+            settings.TRACEABILITY_MASTER_URL
+        )
+
+        print("PARSING DATA")
+
+        jobwork_records = parse_jobwork_data(
+            jobwork_sheets
+        )
+
+        trb_records = parse_trb_data(
+            trb_sheets
+        )
+
+        dgbb_records = parse_dgbb_data(
+            dgbb_sheets
+        )
+
+        traceability_records = parse_traceability_data(
+            trace_sheets
+        )
+
+        master, grouped = build_mo_master(
+            jobwork_records,
+            trb_records,
+            dgbb_records,
+            traceability_records
+        )
+
+        FLOW_CACHE = grouped
+
+        MASTER_CACHE = sorted(
+            master,
+            key=lambda x: (
+                x.get("start_date")
+                or datetime.min.date()
+            ),
+            reverse=True
+        )
 
         return {
             "status": "success",
-            "count": len(MASTER_CACHE),
+            "total_mo": len(MASTER_CACHE),
             "data": MASTER_CACHE
         }
 
     except Exception as e:
+
+        import traceback
+
+        print(traceback.format_exc())
 
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
 
-
 # =========================================================
 # FLOW API
 # =========================================================
 
-@router.get("/traceability_report/{mo}")
-def get_flow(mo: str):
+@router.get("/traceability_flow/{mo}")
+def get_traceability_flow(
+    mo: str,
+    db: Session = Depends(get_db)
+):
+
+    global FLOW_CACHE
 
     try:
 
-        ensure_cache()
+        if FLOW_CACHE is None:
 
-        if mo not in FLOW_CACHE:
+            get_traceability_master()
 
-            raise HTTPException(
-                status_code=404,
-                detail="MO not found"
+        normalized = extract_base_mo(mo)
+
+        flow = FLOW_CACHE.get(normalized, [])
+
+        flow.sort(
+            key=lambda x: (
+                x.get("date")
+                or datetime.min.date()
             )
+        )
+
+        for row in flow:
+
+            for key, value in row.items():
+
+                try:
+
+                    if isinstance(value, float):
+
+                        if math.isnan(value):
+                            row[key] = None
+
+                except:
+                    pass
 
         return {
             "status": "success",
-            "data": [
-                FLOW_CACHE[mo]
-            ]
+            "mo": normalized,
+            "records": flow
         }
 
     except Exception as e:
+
+        import traceback
+
+        print(traceback.format_exc())
 
         raise HTTPException(
             status_code=500,
