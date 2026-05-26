@@ -4,6 +4,7 @@ import Login from "./Login";
 import MainDashboard from "./pages/MainDashboard";
 import Forecasting from "./pages/Forecasting";
 import Orders from "./pages/Orders";
+import Traceability from './pages/Traceability'; // Adjust this path if your file is in a subfolder
 import Inventory from "./pages/Inventory";
 import Production from "./pages/Production";
 import Procurement from "./pages/Procurement";
