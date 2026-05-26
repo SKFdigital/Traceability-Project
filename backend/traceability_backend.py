@@ -339,34 +339,48 @@ def parse_traceability_data(sheets, target_mo):
 # =========================================================
 # MAIN TRACEABILITY ROUTE
 # =========================================================
-
 @router.get("/traceability_report/{mo_number}")
 def get_traceability_history(mo_number: str, db: Session = Depends(get_db)):
 
     try:
 
+        print("TRACEABILITY API CALLED")
+        print("INPUT MO:", mo_number)
+
         normalized_target = extract_base_mo(mo_number)
+
+        print("NORMALIZED MO:", normalized_target)
 
         # -------------------------------------------------
         # LOAD FILES
         # -------------------------------------------------
 
+        print("LOADING JOBWORK")
         jobwork_sheets = load_excel_sheets(settings.JOBWORK_REPORT_URL)
 
+        print("LOADING TRB")
         trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
 
+        print("LOADING DGBB")
         dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
+        print("LOADING TRACEABILITY")
         trace_sheets = load_excel_sheets(settings.TRACEABILITY_MASTER_URL)
+
+        print("FILES LOADED SUCCESSFULLY")
 
         # -------------------------------------------------
         # JOBWORK
         # -------------------------------------------------
 
+        print("PARSING JOBWORK")
+
         jobwork_data = parse_jobwork_data(
             jobwork_sheets,
             normalized_target
         )
+
+        print("JOBWORK RECORDS:", len(jobwork_data))
 
         reference_dates = []
 
@@ -378,15 +392,21 @@ def get_traceability_history(mo_number: str, db: Session = Depends(get_db)):
         # TRB
         # -------------------------------------------------
 
+        print("PARSING TRB")
+
         trb_data = parse_trb_data(
             trb_sheets,
             normalized_target,
             reference_dates
         )
 
+        print("TRB RECORDS:", len(trb_data))
+
         # -------------------------------------------------
         # DGBB
         # -------------------------------------------------
+
+        print("PARSING DGBB")
 
         dgbb_data = parse_dgbb_data(
             dgbb_sheets,
@@ -394,14 +414,20 @@ def get_traceability_history(mo_number: str, db: Session = Depends(get_db)):
             reference_dates
         )
 
+        print("DGBB RECORDS:", len(dgbb_data))
+
         # -------------------------------------------------
         # TRACEABILITY
         # -------------------------------------------------
+
+        print("PARSING TRACEABILITY")
 
         traceability_data = parse_traceability_data(
             trace_sheets,
             normalized_target
         )
+
+        print("TRACEABILITY RECORDS:", len(traceability_data))
 
         # -------------------------------------------------
         # FINAL TIMELINE
@@ -418,6 +444,8 @@ def get_traceability_history(mo_number: str, db: Session = Depends(get_db)):
             key=lambda x: x.get("date") or datetime.min.date()
         )
 
+        print("FINAL TIMELINE:", len(timeline))
+
         return {
             "status": "success",
             "searched_mo": mo_number,
@@ -430,8 +458,10 @@ def get_traceability_history(mo_number: str, db: Session = Depends(get_db)):
 
         import traceback
 
-        print("TRACEABILITY ERROR:")
+        print("============== TRACEABILITY ERROR ==============")
+        print(str(e))
         print(traceback.format_exc())
+        print("===============================================")
 
         raise HTTPException(
             status_code=500,
