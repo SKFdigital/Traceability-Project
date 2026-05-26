@@ -2,6 +2,8 @@
 fastapi
 uvicorn[standard]
 
+openpyxl
+
 # Database & ORM
 sqlalchemy
 psycopg2-binary
