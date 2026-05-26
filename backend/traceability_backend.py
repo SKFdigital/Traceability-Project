@@ -7,6 +7,7 @@ import pandas as pd
 import requests
 import io
 import re
+import math
 
 from datetime import datetime, timedelta
 
@@ -40,6 +41,19 @@ def normalize_text(value):
     if pd.isna(value):
         return ""
     return str(value).strip()
+
+def clean_nan(value):
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except:
+        pass
+
+    return value
 
 def extract_base_mo(mo):
     """
@@ -287,12 +301,12 @@ def parse_dgbb_data(sheets, target_mo, reference_dates):
                 "sheet": sheet_name,
                 "channel": sheet_name,
                 "date": row_date,
-                "shift": row.get("Shift"),
+                "shift": clean_nan(row.get("Shift")),
                 "mo": mo,
                 "normalized_mo": normalized,
-                "production": row.get("Production"),
-                "cumulative_production": row.get("Cumulative production"),
-                "towards_packaging": row.get("Towards Packaging"),
+                "production": clean_nan(row.get("Production")),
+                "cumulative_production": clean_nan(row.get("Cumulative production")),
+                "towards_packaging": clean_nan(row.get("Towards Packaging")),
                 "next_station": row.get("Next_Station"),
                 "remark": normalize_text(row.get("Remark")),
             })
@@ -445,6 +459,18 @@ def get_traceability_history(mo_number: str, db: Session = Depends(get_db)):
         )
 
         print("FINAL TIMELINE:", len(timeline))
+
+        for row in timeline:
+
+            for key, value in row.items():
+
+                try:
+
+                    if isinstance(value, float) and math.isnan(value):
+                        row[key] = None
+
+                except:
+                    pass
 
         return {
             "status": "success",
