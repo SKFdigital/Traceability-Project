@@ -59,6 +59,13 @@ export default function MainDashboard() {
       path: "/chatbot",
       icon: "🤖",
     },
+    // --- ADDED TRACEABILITY MODULE BELOW ---
+    {
+      title: "MO Traceability",
+      desc: "End-to-end manufacturing order tracking",
+      path: "/traceability",
+      icon: "🔍",
+    },
   ];
 
   return (
