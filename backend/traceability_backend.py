@@ -5,6 +5,7 @@ import io
 import threading
 import time
 import re
+import math
 from datetime import datetime
 from settings import settings
 
@@ -24,12 +25,27 @@ CACHE_DURATION_MINUTES = 5
 # =========================================================
 def clean_mo(value):
     """
-    Keeps the full unique MO designation intact to ensure 
-    7-letter and 4-letter MO codes never blend or duplicate.
+    Cleans the MO and aggressively filters out Excel junk rows.
+    Returns None if the row is invalid noise like "..." or empty.
     """
     if pd.isna(value):
-        return ""
-    return str(value).strip().upper().replace(" ", "")
+        return None
+        
+    val = str(value).strip().upper().replace(" ", "").replace(".0", "")
+    
+    # Drop junk PO entries and human errors
+    if val in ["NAN", "-", "...", ""] or len(val) < 4:
+        return None
+        
+    return val
+
+def get_mo_group(clean_mo_str):
+    """
+    Extracts the first 4 characters to group matching MOs together.
+    """
+    if clean_mo_str and len(clean_mo_str) >= 4:
+        return clean_mo_str[:4]
+    return clean_mo_str
 
 def normalize_text(value):
     if pd.isna(value):
@@ -37,19 +53,26 @@ def normalize_text(value):
     return str(value).strip()
 
 def clean_nan(value):
+    """
+    Aggressive NaN cleaner. Prevents float('nan') from escaping 
+    into JSON and causing white-screen frontend crashes.
+    """
     try:
-        if pd.isna(value) or str(value).strip().lower() in ['nan', '-']:
-            return 0
+        if pd.isna(value) or str(value).strip().lower() in ['nan', '-', '...', '']:
+            return 0.0
+        f_val = float(value)
+        if math.isnan(f_val):
+            return 0.0
+        return f_val
     except:
-        pass
-    try:
-        return float(value)
-    except:
-        return 0
+        return 0.0
 
 def parse_date_safe(value):
+    """
+    Safely parses dates and ensures NaT (Not a Time) does not break JSON.
+    """
     try:
-        if pd.isna(value):
+        if pd.isna(value) or str(value).strip().lower() in ["nan", "nat", "", "-"]:
             return None
         parsed = pd.to_datetime(value, errors='coerce', dayfirst=True)
         if pd.isna(parsed):
@@ -60,15 +83,14 @@ def parse_date_safe(value):
 
 def parse_product_details(prod_text):
     """
-    Extracts base bearing model (e.g., 6007) and component type (IM/OM)
-    Filters variations like /C3, -2RS1, (Exp)
+    Extracts component type but skips the 4-digit product matching 
+    as requested, passing the base product through as-is.
     """
     text = normalize_text(prod_text).upper()
     component = "IM" if "IM" in text or "IR" in text else ("OM" if "OM" in text or "OR" in text else "Assembly")
     
-    # Match first 4-5 digit sequence for bearing base identity
-    match = re.search(r'\d{4,5}', text)
-    base_product = match.group(0) if match else "Gen Product"
+    # Passing the product string cleanly without regex digit matching
+    base_product = text if text else "Gen Product"
     return base_product, component
 
 def download_excel(url):
@@ -122,11 +144,9 @@ def process_traceability_data():
             if "mo#" not in df.columns or "comp item" not in df.columns:
                 continue
             
-            # Identify the PDIV column dynamically (usually column A)
             pdiv_col = "pdiv" if "pdiv" in df.columns else (df.columns[0] if len(df.columns) > 0 else None)
             
             for _, row in df.iterrows():
-                # --- CONDITION: Filter strictly for 227D and 227T ---
                 if pdiv_col:
                     pdiv_val = normalize_text(row.get(pdiv_col)).upper()
                     if pdiv_val not in ["227D", "227T"]:
@@ -137,19 +157,25 @@ def process_traceability_data():
                     continue
                 
                 comp_type = "IM" if comp_item_str.startswith("IM") else "OM"
+                
+                # Extract and clean MO
                 raw_mo = clean_mo(row.get("mo#"))
                 if not raw_mo:
                     continue
+                
+                # Apply 4-letter grouping
+                mo_group = get_mo_group(raw_mo)
                 
                 qty_req = clean_nan(row.get("qty req"))
                 final_variant = normalize_text(row.get("finalvariant"))
                 base_prod, _ = parse_product_details(final_variant)
                 
-                # Composite Anchor Key treats separate rings and separate MOs independently
-                sum_key = (raw_mo, base_prod, comp_type)
+                # Combine matching MOs using the 4-letter group key
+                sum_key = (mo_group, base_prod, comp_type)
+                
                 if sum_key not in summary_aggregation:
                     summary_aggregation[sum_key] = {
-                        "full_mo": raw_mo,
+                        "mo": mo_group,
                         "base_product": base_prod,
                         "final_variant": final_variant,
                         "component_type": comp_type,
@@ -172,9 +198,11 @@ def process_traceability_data():
                 raw_mo = clean_mo(row.get("po / pr no."))
                 if not raw_mo: 
                     continue
+                    
+                mo_group = get_mo_group(raw_mo)
 
-                if raw_mo not in mo_flow_records:
-                    mo_flow_records[raw_mo] = {"full_mo": raw_mo, "rows": []}
+                if mo_group not in mo_flow_records:
+                    mo_flow_records[mo_group] = {"mo": mo_group, "rows": []}
 
                 product_raw = row.get("product")
                 product_str = normalize_text(product_raw)
@@ -186,20 +214,19 @@ def process_traceability_data():
                 qty_returned = clean_nan(row.get("qty returned"))
                 status = normalize_text(row.get("current status"))
 
-                mo_flow_records[raw_mo]["rows"].append({
+                mo_flow_records[mo_group]["rows"].append({
                     "department": "SHO", "product": product_str, "in_date": "",
                     "out_date": str(last_challan_date) if last_challan_date else "",
                     "qty_in": qty_approved, "qty_out": qty_returned, "status": status
                 })
-                mo_flow_records[raw_mo]["rows"].append({
+                mo_flow_records[mo_group]["rows"].append({
                     "department": "Transit Buffer", "product": product_str, 
                     "in_date": str(jw_challan_date) if jw_challan_date else "",
                     "out_date": str(last_challan_date) if last_challan_date else "",
                     "qty_in": qty_returned, "qty_out": qty_returned, "status": status
                 })
 
-                # Direct match via exact MO, product family, and component type
-                sum_key = (raw_mo, base_prod, comp_type)
+                sum_key = (mo_group, base_prod, comp_type)
                 if sum_key in summary_aggregation:
                     s_agg = summary_aggregation[sum_key]
                     s_agg["sho_qty"] += qty_approved
@@ -212,10 +239,9 @@ def process_traceability_data():
                         s_agg["sho_in_date"] = min(s_agg["sho_in_date"], jw_challan_date) if s_agg["sho_in_date"] else jw_challan_date
                         s_agg["tb_in_date"] = min(s_agg["tb_in_date"], jw_challan_date) if s_agg["tb_in_date"] else jw_challan_date
                 else:
-                    # Fallback structural safeguard for tracked history entries
                     if sum_key not in summary_aggregation:
                         summary_aggregation[sum_key] = {
-                            "full_mo": raw_mo, "base_product": base_prod, "final_variant": product_str,
+                            "mo": mo_group, "base_product": base_prod, "final_variant": product_str,
                             "component_type": comp_type, "qty_req": 0,
                             "sho_qty": qty_approved, "sho_in_date": jw_challan_date, "sho_out_date": last_challan_date,
                             "tb_qty": qty_returned, "tb_in_date": jw_challan_date, "tb_out_date": last_challan_date,
@@ -223,7 +249,7 @@ def process_traceability_data():
                         }
 
         # ---------------------------------------------------------
-        # 2. PROCESS CHANNELS WITH SUMMED LOGIC (COMBINING IR + OR)
+        # 2. PROCESS CHANNELS WITH SUMMED LOGIC
         # ---------------------------------------------------------
         all_channels = {**trb_sheets, **dgbb_sheets}
         channel_variant_maxes = {}
@@ -240,6 +266,8 @@ def process_traceability_data():
                 raw_mo = clean_mo(row.get("mo"))
                 if not raw_mo:
                     continue
+                
+                mo_group = get_mo_group(raw_mo)
 
                 prod_raw = row.get(type_col)
                 prod_str = normalize_text(prod_raw)
@@ -249,18 +277,17 @@ def process_traceability_data():
                 production = clean_nan(row.get("production"))
                 date_val = parse_date_safe(row.get("date"))
 
-                if raw_mo not in mo_flow_records:
-                    mo_flow_records[raw_mo] = {"full_mo": raw_mo, "rows": []}
+                if mo_group not in mo_flow_records:
+                    mo_flow_records[mo_group] = {"mo": mo_group, "rows": []}
 
-                mo_flow_records[raw_mo]["rows"].append({
+                mo_flow_records[mo_group]["rows"].append({
                     "department": channel_name, "product": prod_str,
                     "in_date": str(date_val) if production > 0 and production == cumulative else "",
                     "out_date": str(date_val) if cumulative > 0 else "",
                     "qty_in": cumulative, "qty_out": cumulative, "status": "Completed" if cumulative > 0 else "Running"
                 })
 
-                # Capture max production mapped to exact variant name string
-                v_key = (raw_mo, base_prod, prod_str)
+                v_key = (mo_group, base_prod, prod_str)
                 if v_key not in channel_variant_maxes:
                     channel_variant_maxes[v_key] = {"max_cum": 0.0, "min_date": None, "max_date": None}
                 
@@ -271,10 +298,9 @@ def process_traceability_data():
                     v_meta["min_date"] = min(v_meta["min_date"], date_val) if v_meta["min_date"] else date_val
                     v_meta["max_date"] = max(v_meta["max_date"], date_val) if v_meta["max_date"] else date_val
 
-        # Aggregate exact sub-variants (adding IR and OR totals together) per family code
         family_channel_totals = {}
-        for (raw_mo, base_prod, prod_str), v_meta in channel_variant_maxes.items():
-            f_key = (raw_mo, base_prod)
+        for (mo_group, base_prod, prod_str), v_meta in channel_variant_maxes.items():
+            f_key = (mo_group, base_prod)
             if f_key not in family_channel_totals:
                 family_channel_totals[f_key] = {"ch_qty": 0.0, "ch_in_date": None, "ch_out_date": None}
             
@@ -285,19 +311,17 @@ def process_traceability_data():
             if v_meta["max_date"]:
                 f_meta["ch_out_date"] = max(f_meta["ch_out_date"], v_meta["max_date"]) if f_meta["ch_out_date"] else v_meta["max_date"]
 
-        # Map combined family channel numbers down across corresponding IM & OM items uniformly
-        for (raw_mo, base_prod), f_meta in family_channel_totals.items():
+        for (mo_group, base_prod), f_meta in family_channel_totals.items():
             for comp in ["IM", "OM"]:
-                sum_key = (raw_mo, base_prod, comp)
+                sum_key = (mo_group, base_prod, comp)
                 if sum_key in summary_aggregation:
                     s_agg = summary_aggregation[sum_key]
                     s_agg["ch_qty"] = f_meta["ch_qty"]
                     s_agg["ch_in_date"] = f_meta["ch_in_date"]
                     s_agg["ch_out_date"] = f_meta["ch_out_date"]
                 else:
-                    # Append fallback anchor if seeded entry didn't exist in original MO map
                     summary_aggregation[sum_key] = {
-                        "full_mo": raw_mo, "base_product": base_prod, "final_variant": "Combined Family Channel Grouping",
+                        "mo": mo_group, "base_product": base_prod, "final_variant": "Combined Family Channel Grouping",
                         "component_type": comp, "qty_req": 0,
                         "sho_qty": 0.0, "sho_in_date": None, "sho_out_date": None,
                         "tb_qty": 0.0, "tb_in_date": None, "tb_out_date": None,
@@ -308,7 +332,7 @@ def process_traceability_data():
         # 3. COMPILING FINAL CACHE DATA FRAMES & SORTING
         # ---------------------------------------------------------
         compiled_summary = []
-        for (raw_mo, base_prod, comp_type), s_agg in summary_aggregation.items():
+        for (mo_group, base_prod, comp_type), s_agg in summary_aggregation.items():
             if s_agg["sho_qty"] == 0 and s_agg["ch_qty"] == 0:
                 calc_status = "Yet to Start"
             elif s_agg["ch_qty"] >= s_agg["sho_qty"] and s_agg["sho_qty"] > 0:
@@ -317,7 +341,7 @@ def process_traceability_data():
                 calc_status = "In Process"
 
             compiled_summary.append({
-                "mo": raw_mo,
+                "mo": mo_group,
                 "base_product": s_agg["base_product"],
                 "final_variant": s_agg["final_variant"],
                 "component_type": comp_type,
@@ -334,7 +358,6 @@ def process_traceability_data():
                 "status": calc_status
             })
 
-        # Sorts cleanly so multiple distinct bearing models run inside their target MO parent block
         compiled_summary.sort(key=lambda x: (x["mo"], x["base_product"], x["component_type"]))
         
         MASTER_CACHE = compiled_summary
@@ -376,7 +399,7 @@ def get_all_mos():
 
 @router.get("/traceability_report/{mo}")
 def get_flow(mo: str):
-    search_mo = clean_mo(mo)
+    search_mo = get_mo_group(clean_mo(mo))
     if search_mo in FLOW_CACHE:
         return {
             "status": "success",
