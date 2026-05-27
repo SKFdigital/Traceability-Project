@@ -68,7 +68,7 @@ def load_excel_sheets(url):
         for sheet in xls.sheet_names:
             try:
                 df = pd.read_excel(xls, sheet_name=sheet)
-                # CRITICAL: Force all columns to lowercase to avoid missing matches
+                # Force all columns to lowercase to avoid missing matches
                 df.columns = [str(c).strip().lower() for c in df.columns]
                 sheets[sheet] = df
             except Exception as e:
@@ -99,7 +99,7 @@ def process_traceability_data():
         mo_records = {}
 
         # ---------------------------------------------------------
-        # 1. PROCESS JOBWORK REPORT (SHO & Transit Buffer)
+        # 1. PROCESS JOBWORK REPORT (SHO & Transit Buffer Individual)
         # ---------------------------------------------------------
         for sheet_name, df in jobwork_sheets.items():
             if "po / pr no." not in df.columns:
@@ -145,6 +145,39 @@ def process_traceability_data():
                     "qty_in": qty_returned, 
                     "qty_out": qty_returned,
                     "status": status
+                })
+
+        # ---------------------------------------------------------
+        # INSERT CUMULATIVE SUMMARY ROWS FOR SHO & TRANSIT BUFFER
+        # ---------------------------------------------------------
+        for prefix, data in mo_records.items():
+            sho_rows = [r for r in data["rows"] if r["department"] == "SHO"]
+            tb_rows = [r for r in data["rows"] if r["department"] == "Transit Buffer"]
+
+            if sho_rows:
+                sho_total_in = sum(r["qty_in"] for r in sho_rows)
+                sho_total_out = sum(r["qty_out"] for r in sho_rows)
+                data["rows"].append({
+                    "department": "SHO (Total)",
+                    "product": "All Types Combined",
+                    "in_date": "",
+                    "out_date": "",
+                    "qty_in": sho_total_in,
+                    "qty_out": sho_total_out,
+                    "status": "Aggregated"
+                })
+
+            if tb_rows:
+                tb_total_in = sum(r["qty_in"] for r in tb_rows)
+                tb_total_out = sum(r["qty_out"] for r in tb_rows)
+                data["rows"].append({
+                    "department": "Transit Buffer (Total)",
+                    "product": "All Types Combined",
+                    "in_date": "",
+                    "out_date": "",
+                    "qty_in": tb_total_in,
+                    "qty_out": tb_total_out,
+                    "status": "Aggregated"
                 })
 
         # ---------------------------------------------------------
@@ -197,7 +230,6 @@ def process_traceability_data():
         # Push processed channel records back into global tracking map
         for (prefix, channel_name, prod_type), metrics in channel_aggregation.items():
             if prefix not in mo_records:
-                # Capture External Suppliers that are directly allocated straight to channels
                 mo_records[prefix] = {
                     "full_mo": metrics["raw_mo_string"],
                     "family": prefix,
@@ -209,7 +241,7 @@ def process_traceability_data():
             max_qty = metrics["max_cumulative"]
 
             mo_records[prefix]["rows"].append({
-                "department": channel_name, # CH02, T3, etc.
+                "department": channel_name, 
                 "product": prod_type,
                 "in_date": in_d_str,
                 "out_date": out_d_str,
@@ -225,8 +257,9 @@ def process_traceability_data():
         new_flow = {}
 
         for prefix, data in mo_records.items():
+            # For master KPI stats, safely grab from calculated summary row values if available
             sho_sum = sum(r["qty_in"] for r in data["rows"] if r["department"] == "SHO")
-            channel_sum = sum(r["qty_out"] for r in data["rows"] if r["department"] not in ["SHO", "Transit Buffer"])
+            channel_sum = sum(r["qty_out"] for r in data["rows"] if r["department"] not in ["SHO", "Transit Buffer", "SHO (Total)", "Transit Buffer (Total)"])
 
             new_master.append({
                 "mo": data["full_mo"],
