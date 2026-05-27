@@ -12,14 +12,12 @@ from models import (
 from auth import hash_password, verify_password, create_token
 from schemas import RegisterRequest, LoginRequest
 from order_backend_postgres import router as order_router
-# NEW: Import for the Traceability Module
 from traceability_backend import router as traceability_router
 
 # ================= APP =================
 app = FastAPI(title="AI-Driven SCM Backend API")
 
 # ================= CORS =================
-# Using a wide-open policy to eliminate connection errors while you debug
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -47,7 +45,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 
     user = User(
         email=data.email,
-        password_hash=hash_password(data.password), # Matches your models
+        password_hash=hash_password(data.password),
         role=data.role,
         is_active=True,
         created_at=datetime.utcnow(),
@@ -60,69 +58,31 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 @app.post("/login")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == data.email).first()
-    # Ensure you are checking the hashed password field
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = create_token({"email": user.email, "role": user.role})
-    return {"access_token": token, "token_type": "bearer", "role": user.role}
+    return {
+        "access_token": token, 
+        "token": token,  # Provided alongside access_token for older frontend compatibility
+        "token_type": "bearer", 
+        "role": user.role
+    }
 
-# ================= INCLUDE ROUTERS =================
-app.include_router(order_router)
-# NEW: Register the Traceability Module router
-app.include_router(traceability_router)
-
-# ================= OTHER ROUTES (Kept intact) =================
-@app.get("/")
-def root():
-    return {"message": "SCM Backend Running"}
-
-@app.get("/users")
-def list_users(db: Session = Depends(get_db)):
-    return db.query(User).all()
-
-# ================= REGISTER (Duplicate kept) =================
-@app.post("/register")
-def register(data: RegisterRequest, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == data.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    user = User(
-        email=data.email,
-        password_hash=hash_password(data.password),
-        role=data.role,
-        is_active=1,
-        created_at=datetime.utcnow(),
-    )
-
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return {"message": "User registered successfully", "user_id": user.id}
-
-# ================= LOGIN (Duplicate kept) =================
-@app.post("/login")
-def login(data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == data.email).first()
-
-    if not user or not verify_password(data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    token = create_token({"email": user.email, "role": user.role})
-    return {"token": token, "role": user.role}
-
-# ================= USERS (DEBUG) =================
 @app.get("/users")
 def list_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
+    # Explicit conversion drops password hashes from structural network payloads
     return [{"id": u.id, "email": u.email, "role": u.role} for u in users]
 
-# ============================================================
-# 🔥 INCLUDE ORDERS ROUTER (THIS IS WHAT FIXES 404s)
-# ============================================================
+# ================= INCLUDE ROUTERS =================
 app.include_router(order_router)
+app.include_router(traceability_router)
+
+# ================= BASE ROOT CONTROLLER =================
+@app.get("/")
+def root():
+    return {"message": "SCM Backend Running"}
 
 # ================= PROCUREMENT =================
 @app.get("/procurement")
