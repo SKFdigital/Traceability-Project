@@ -1,36 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './Traceability.css';
 
 const API = 'https://scm-backend-pshv.onrender.com';
 
 const Traceability = () => {
+  // Navigation & Data Management States
+  const [summaryData, setSummaryData] = useState([]);
+  const [selectedMoFlow, setSelectedMoFlow] = useState(null);
+  
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState(null);
   const [error, setError] = useState('');
 
-  // =====================================================
-  // SEARCH MO FLOW
-  // =====================================================
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    if (!search.trim()) return;
+  // Fetch Summary Dashboard Data automatically on Mount
+  useEffect(() => {
+    fetchSummaryDashboard();
+  }, []);
 
+  const fetchSummaryDashboard = async () => {
     try {
       setLoading(true);
-      setError('');
-      setData(null);
-
-      const response = await fetch(`${API}/traceability_report/${search.trim()}`);
-      
-      if (!response.ok) {
-        throw new Error('MO not found or data is still loading in background.');
-      }
-
-      const result = await response.json();
-      
-      if (result.status === 'success') {
-        setData(result.data);
+      const res = await fetch(`${API}/traceability_all_mos`);
+      if (!res.ok) throw new Error('Failed to retrieve summary tracking records.');
+      const json = await res.json();
+      if (json.status === 'success') {
+        setSummaryData(json.data);
       }
     } catch (err) {
       setError(err.message);
@@ -39,62 +33,164 @@ const Traceability = () => {
     }
   };
 
-  // =====================================================
-  // UI
-  // =====================================================
+  // Trigger Detailed Flow View on click of specific MO identifier
+  const handleViewDetail = async (moString) => {
+    try {
+      setLoading(true);
+      setError('');
+      const res = await fetch(`${API}/traceability_report/${moString.trim()}`);
+      if (!res.ok) throw new Error('Could not pull tracking log sequence information.');
+      const json = await res.json();
+      if (json.status === 'success') {
+        setSelectedMoFlow(json.data);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Filter Summary results matching Search Criteria keyword entry queries
+  const filteredSummary = summaryData.filter(item => 
+    item.mo.toLowerCase().includes(search.toLowerCase()) ||
+    item.base_product.toLowerCase().includes(search.toLowerCase())
+  );
+
   return (
     <div className="traceability-container">
+      {/* ---------------------------------------------------
+          HEADER CONTROLS ACTION SECTION
+         --------------------------------------------------- */}
       <div className="header-section">
-        <h1>MO Traceability Tracking</h1>
+        <div>
+          <h1>MO Traceability Tracking</h1>
+          <p className="sub-tag">
+            {selectedMoFlow ? `Detailed Route Flow / Order: ${selectedMoFlow.mo}` : "Production Order Global KPI Summary Dashboard"}
+          </p>
+        </div>
         
-        <form onSubmit={handleSearch} className="search-form">
-          <input
-            className="search-box"
-            placeholder="Enter MO Number (e.g. M108)..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <button type="submit" className="search-btn" disabled={loading}>
-            {loading ? 'Searching...' : 'Search'}
-          </button>
-        </form>
+        <div className="control-actions">
+          {selectedMoFlow ? (
+            <button className="back-btn" onClick={() => setSelectedMoFlow(null)}>
+              ← Back to Summary Dashboard
+            </button>
+          ) : (
+            <input
+              className="search-box"
+              placeholder="Filter Dashboard Summary..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          )}
+        </div>
       </div>
 
       {error && <div className="error-box">{error}</div>}
+      {loading && <div className="loading-spinner">Querying Database Pipeline Cache...</div>}
 
-      {!loading && data && data.flow_data && (
+      {/* ---------------------------------------------------
+          VIEW BLOCK 1: MAIN EXHAUSTIVE SUMMARY DASHBOARD
+         --------------------------------------------------- */}
+      {!loading && !selectedMoFlow && (
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr className="super-header">
+                <th colSpan="3">Order Metadata</th>
+                <th colSpan="3" className="sho-head">SHO Department</th>
+                <th colSpan="3" className="tb-head">Transit Buffer</th>
+                <th colSpan="3" className="ch-head">Channel Section</th>
+                <th>System Status</th>
+              </tr>
+              <tr>
+                <th>MO Number</th>
+                <th>Type</th>
+                <th>Product</th>
+                <th className="sho-head">Qty</th>
+                <th className="sho-head">In Date</th>
+                <th className="sho-head">Out Date</th>
+                <th className="tb-head">Qty</th>
+                <th className="tb-head">In Date</th>
+                <th className="tb-head">Out Date</th>
+                <th className="ch-head">Qty</th>
+                <th className="ch-head">In Date</th>
+                <th className="ch-head">Out Date</th>
+                <th>Tracking Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredSummary.map((row, idx) => (
+                <tr key={idx}>
+                  <td>
+                    <button className="mo-link-btn" onClick={() => handleViewDetail(row.mo)}>
+                      {row.mo}
+                    </button>
+                  </td>
+                  <td><strong>{row.component_type}</strong></td>
+                  <td>{row.base_product}</td>
+                  <td>{row.sho_qty.toLocaleString()}</td>
+                  <td>{row.sho_in}</td>
+                  <td>{row.sho_out}</td>
+                  <td>{row.tb_qty.toLocaleString()}</td>
+                  <td>{row.tb_in}</td>
+                  <td>{row.tb_out}</td>
+                  <td>{row.ch_qty.toLocaleString()}</td>
+                  <td>{row.ch_in}</td>
+                  <td>{row.ch_out}</td>
+                  <td>
+                    <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                      {row.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {filteredSummary.length === 0 && (
+                <tr>
+                  <td colSpan="13" style={{ textAlign: 'center', padding: '30px' }}>
+                    No matching Production Tracking data frames located.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ---------------------------------------------------
+          VIEW BLOCK 2: TARGET DRILLDOWN DETAILED FLOW
+         --------------------------------------------------- */}
+      {!loading && selectedMoFlow && (
         <div className="table-wrapper">
           <table>
             <thead>
               <tr>
-                <th>MO</th>
-                <th>Department/Location</th>
-                <th>Product/ Part Name</th>
+                <th>MO Reference</th>
+                <th>Department / Specific Location</th>
+                <th>Product / Part Sub Variant</th>
                 <th>In Date</th>
                 <th>Out Date</th>
                 <th>Qty In</th>
                 <th>Qty Out</th>
-                <th>Status</th>
+                <th>Execution Status</th>
               </tr>
             </thead>
             <tbody>
-              {data.flow_data.map((row, index) => {
-                // Determine if we need to show the MO cell (only on the first row to span across)
+              {selectedMoFlow.flow_data.map((row, index) => {
                 const isFirstRow = index === 0;
-
                 return (
                   <tr key={index}>
                     {isFirstRow && (
-                      <td rowSpan={data.flow_data.length} className="mo-cell">
-                        <strong>{data.mo}</strong>
+                      <td rowSpan={selectedMoFlow.flow_data.length} className="mo-cell">
+                        <strong>{selectedMoFlow.mo}</strong>
                       </td>
                     )}
                     <td>{row.department}</td>
                     <td>{row.product || '-'}</td>
                     <td>{row.in_date || '-'}</td>
                     <td>{row.out_date || '-'}</td>
-                    <td>{row.qty_in}</td>
-                    <td>{row.qty_out}</td>
+                    <td>{row.qty_in?.toLocaleString()}</td>
+                    <td>{row.qty_out?.toLocaleString()}</td>
                     <td>
                       <span className={`status-badge ${row.status?.toLowerCase().replace(' ', '-')}`}>
                         {row.status || '-'}
