@@ -76,7 +76,7 @@ def parse_date_safe(value):
         if pd.isna(value):
             return None
 
-        parsed = pd.to_datetime(value, errors='coerce')
+        parsed = pd.to_datetime(value, errors='coerce', dayfirst=True)
 
         if pd.isna(parsed):
             return None
