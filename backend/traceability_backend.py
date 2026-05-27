@@ -95,8 +95,11 @@ def process_traceability_data():
         trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
         dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
-        # Grouping strictly by the first 4 characters (Prefix) to ensure SHO and Channels merge
         mo_records = {}
+        
+        # Temporary tracker to compute Type-Wise summaries for JobWork
+        # Key: (prefix, product_type) -> values
+        jobwork_totals = {}
 
         # ---------------------------------------------------------
         # 1. PROCESS JOBWORK REPORT (SHO & Transit Buffer Individual)
@@ -118,14 +121,14 @@ def process_traceability_data():
                         "rows": []
                     }
 
-                product = normalize_text(row.get("product"))
+                product = normalize_text(row.get("product")) # Keeps IM / OM separate
                 jw_challan_date = parse_date_safe(row.get("jw challan date"))
                 last_challan_date = parse_date_safe(row.get("last challan date"))
                 qty_approved = clean_nan(row.get("qty approved"))
                 qty_returned = clean_nan(row.get("qty returned"))
                 status = normalize_text(row.get("current status"))
 
-                # Create SHO Entry
+                # Add individual SHO entry
                 mo_records[prefix]["rows"].append({
                     "department": "SHO",
                     "product": product,
@@ -136,7 +139,7 @@ def process_traceability_data():
                     "status": status
                 })
 
-                # Create Transit Buffer Entry
+                # Add individual Transit Buffer entry
                 mo_records[prefix]["rows"].append({
                     "department": "Transit Buffer",
                     "product": product,
@@ -147,36 +150,45 @@ def process_traceability_data():
                     "status": status
                 })
 
-        # ---------------------------------------------------------
-        # INSERT CUMULATIVE SUMMARY ROWS FOR SHO & TRANSIT BUFFER
-        # ---------------------------------------------------------
-        for prefix, data in mo_records.items():
-            sho_rows = [r for r in data["rows"] if r["department"] == "SHO"]
-            tb_rows = [r for r in data["rows"] if r["department"] == "Transit Buffer"]
+                # Aggregate dynamically by compound key (Prefix + Product Type)
+                jw_key = (prefix, product)
+                if jw_key not in jobwork_totals:
+                    jobwork_totals[jw_key] = {
+                        "sho_in": 0.0,
+                        "sho_out": 0.0,
+                        "tb_in": 0.0,
+                        "tb_out": 0.0
+                    }
+                
+                jobwork_totals[jw_key]["sho_in"] += qty_approved
+                jobwork_totals[jw_key]["sho_out"] += qty_returned
+                jobwork_totals[jw_key]["tb_in"] += qty_returned
+                jobwork_totals[jw_key]["tb_out"] += qty_returned
 
-            if sho_rows:
-                sho_total_in = sum(r["qty_in"] for r in sho_rows)
-                sho_total_out = sum(r["qty_out"] for r in sho_rows)
-                data["rows"].append({
+        # ---------------------------------------------------------
+        # INSERT TYPE-WISE SUMMARY ROWS FOR SHO & TRANSIT BUFFER
+        # ---------------------------------------------------------
+        for (prefix, product), totals in jobwork_totals.items():
+            if prefix in mo_records:
+                # Add specific SHO total row for this type (IM/OM)
+                mo_records[prefix]["rows"].append({
                     "department": "SHO (Total)",
-                    "product": "All Types Combined",
+                    "product": product, # e.g. IM or OM
                     "in_date": "",
                     "out_date": "",
-                    "qty_in": sho_total_in,
-                    "qty_out": sho_total_out,
+                    "qty_in": totals["sho_in"],
+                    "qty_out": totals["sho_out"],
                     "status": "Aggregated"
                 })
 
-            if tb_rows:
-                tb_total_in = sum(r["qty_in"] for r in tb_rows)
-                tb_total_out = sum(r["qty_out"] for r in tb_rows)
-                data["rows"].append({
+                # Add specific Transit Buffer total row for this type (IM/OM)
+                mo_records[prefix]["rows"].append({
                     "department": "Transit Buffer (Total)",
-                    "product": "All Types Combined",
+                    "product": product, # e.g. IM or OM
                     "in_date": "",
                     "out_date": "",
-                    "qty_in": tb_total_in,
-                    "qty_out": tb_total_out,
+                    "qty_in": totals["tb_in"],
+                    "qty_out": totals["tb_out"],
                     "status": "Aggregated"
                 })
 
@@ -257,7 +269,7 @@ def process_traceability_data():
         new_flow = {}
 
         for prefix, data in mo_records.items():
-            # For master KPI stats, safely grab from calculated summary row values if available
+            # For master KPI summaries, count base entries to prevent doubling calculations
             sho_sum = sum(r["qty_in"] for r in data["rows"] if r["department"] == "SHO")
             channel_sum = sum(r["qty_out"] for r in data["rows"] if r["department"] not in ["SHO", "Transit Buffer", "SHO (Total)", "Transit Buffer (Total)"])
 
