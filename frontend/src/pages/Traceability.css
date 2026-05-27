@@ -19,21 +19,46 @@
   color: #1f2937;
 }
 
+.search-form {
+  display: flex;
+  gap: 10px;
+}
+
 .search-box {
   padding: 12px;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid #cbd5e1;
-  width: 350px;
+  width: 300px;
   font-size: 15px;
   outline: none;
 }
 
-.loading-box {
-  background: white;
-  padding: 20px;
-  border-radius: 12px;
+.search-btn {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 15px;
+}
+
+.search-btn:hover {
+  background: #1d4ed8;
+}
+
+.search-btn:disabled {
+  background: #93c5fd;
+  cursor: not-allowed;
+}
+
+.error-box {
+  background: #fee2e2;
+  color: #b91c1c;
+  padding: 16px;
+  border-radius: 8px;
   margin-bottom: 20px;
-  text-align: center;
   font-weight: bold;
 }
 
@@ -47,7 +72,6 @@
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1600px;
 }
 
 thead {
@@ -60,77 +84,38 @@ th {
   text-align: left;
   font-size: 14px;
   white-space: nowrap;
+  border: 1px solid #334155;
 }
 
 td {
   padding: 12px 14px;
-  border-bottom: 1px solid #e5e7eb;
+  border: 1px solid #e5e7eb;
   font-size: 14px;
   white-space: nowrap;
+  vertical-align: middle;
+}
+
+.mo-cell {
+  background: #f8fafc;
+  text-align: center;
+  font-size: 16px;
+  color: #0f172a;
 }
 
 tr:hover {
   background: #f8fafc;
 }
 
-button {
-  background: #2563eb;
-  color: white;
-  border: none;
-  padding: 10px 14px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: bold;
-}
-
-button:hover {
-  background: #1d4ed8;
-}
-
-.flow-header {
-  margin-bottom: 24px;
-}
-
-.flow-header h1 {
-  margin: 0;
-  color: #111827;
-}
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.summary-card {
-  background: white;
-  padding: 18px;
-  border-radius: 14px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-}
-
-.summary-card h3 {
-  margin: 0 0 10px 0;
-  color: #374151;
-  font-size: 15px;
-}
-
-.summary-card p {
-  margin: 0;
-  font-size: 20px;
-  font-weight: bold;
-  color: #111827;
-}
-
 @media screen and (max-width: 768px) {
-
+  .search-form {
+    width: 100%;
+    flex-direction: column;
+  }
   .search-box {
     width: 100%;
   }
-
   .header-section {
     flex-direction: column;
-    align-items: stretch;
+    align-items: flex-start;
   }
 }
