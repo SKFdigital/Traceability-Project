@@ -4,15 +4,14 @@ import './Traceability.css';
 const API = 'https://scm-backend-pshv.onrender.com';
 
 const Traceability = () => {
-  // Navigation & Data Management States
   const [summaryData, setSummaryData] = useState([]);
   const [selectedMoFlow, setSelectedMoFlow] = useState(null);
   
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState('');
 
-  // Fetch Summary Dashboard Data automatically on Mount
   useEffect(() => {
     fetchSummaryDashboard();
   }, []);
@@ -20,10 +19,18 @@ const Traceability = () => {
   const fetchSummaryDashboard = async () => {
     try {
       setLoading(true);
+      setError('');
       const res = await fetch(`${API}/traceability_all_mos`);
-      if (!res.ok) throw new Error('Failed to retrieve summary tracking records.');
+      if (!res.ok) throw new Error('Network error pulling records from pipeline.');
+      
       const json = await res.json();
-      if (json.status === 'success') {
+      
+      if (json.status === 'initializing') {
+        setIsInitializing(true);
+        // Retry connection in 4 seconds automatically
+        setTimeout(fetchSummaryDashboard, 4000);
+      } else if (json.status === 'success') {
+        setIsInitializing(false);
         setSummaryData(json.data);
       }
     } catch (err) {
@@ -33,13 +40,12 @@ const Traceability = () => {
     }
   };
 
-  // Trigger Detailed Flow View on click of specific MO identifier
   const handleViewDetail = async (moString) => {
     try {
       setLoading(true);
       setError('');
       const res = await fetch(`${API}/traceability_report/${moString.trim()}`);
-      if (!res.ok) throw new Error('Could not pull tracking log sequence information.');
+      if (!res.ok) throw new Error('Could not pull tracking sequence for this production order.');
       const json = await res.json();
       if (json.status === 'success') {
         setSelectedMoFlow(json.data);
@@ -51,7 +57,6 @@ const Traceability = () => {
     }
   };
 
-  // Filter Summary results matching Search Criteria keyword entry queries
   const filteredSummary = summaryData.filter(item => 
     item.mo.toLowerCase().includes(search.toLowerCase()) ||
     item.base_product.toLowerCase().includes(search.toLowerCase())
@@ -59,9 +64,6 @@ const Traceability = () => {
 
   return (
     <div className="traceability-container">
-      {/* ---------------------------------------------------
-          HEADER CONTROLS ACTION SECTION
-         --------------------------------------------------- */}
       <div className="header-section">
         <div>
           <h1>MO Traceability Tracking</h1>
@@ -81,18 +83,27 @@ const Traceability = () => {
               placeholder="Filter Dashboard Summary..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              disabled={isInitializing}
             />
           )}
         </div>
       </div>
 
       {error && <div className="error-box">{error}</div>}
-      {loading && <div className="loading-spinner">Querying Database Pipeline Cache...</div>}
+      
+      {/* Dynamic system warmup handling */}
+      {isInitializing && (
+        <div className="initializing-box">
+          <div className="spinner"></div>
+          <p><strong>System Backend is warming up...</strong></p>
+          <p className="sub-text">Downloading and parsing master excel configurations. Auto-refreshing in a few moments...</p>
+        </div>
+      )}
 
-      {/* ---------------------------------------------------
-          VIEW BLOCK 1: MAIN EXHAUSTIVE SUMMARY DASHBOARD
-         --------------------------------------------------- */}
-      {!loading && !selectedMoFlow && (
+      {loading && !isInitializing && <div className="loading-spinner">Querying Database Pipeline Cache...</div>}
+
+      {/* VIEW BLOCK 1: MAIN SUMMARY DASHBOARD */}
+      {!loading && !isInitializing && !selectedMoFlow && (
         <div className="table-wrapper">
           <table>
             <thead>
@@ -157,9 +168,7 @@ const Traceability = () => {
         </div>
       )}
 
-      {/* ---------------------------------------------------
-          VIEW BLOCK 2: TARGET DRILLDOWN DETAILED FLOW
-         --------------------------------------------------- */}
+      {/* VIEW BLOCK 2: TARGET DRILLDOWN DETAILED FLOW */}
       {!loading && selectedMoFlow && (
         <div className="table-wrapper">
           <table>
