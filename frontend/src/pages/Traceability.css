@@ -1,121 +1,157 @@
 .traceability-container {
   padding: 24px;
-  background: #f5f7fb;
+  background: #f8fafc;
   min-height: 100vh;
-  font-family: Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
 }
 
 .header-section {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   gap: 20px;
-  flex-wrap: wrap;
 }
 
 .header-section h1 {
   margin: 0;
-  color: #1f2937;
+  font-size: 28px;
+  color: #0f172a;
 }
 
-.search-form {
-  display: flex;
-  gap: 10px;
+.sub-tag {
+  margin: 4px 0 0 0;
+  color: #64748b;
+  font-size: 14px;
 }
 
 .search-box {
-  padding: 12px;
+  padding: 10px 16px;
   border-radius: 8px;
   border: 1px solid #cbd5e1;
-  width: 300px;
-  font-size: 15px;
+  width: 280px;
+  font-size: 14px;
   outline: none;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
-.search-btn {
-  background: #2563eb;
+.back-btn {
+  background: #0f172a;
   color: white;
   border: none;
-  padding: 12px 24px;
+  padding: 10px 18px;
   border-radius: 8px;
   cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.back-btn:hover {
+  background: #1e293b;
+}
+
+.mo-link-btn {
+  background: none;
+  border: none;
+  color: #2563eb;
   font-weight: bold;
-  font-size: 15px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
 }
 
-.search-btn:hover {
-  background: #1d4ed8;
-}
-
-.search-btn:disabled {
-  background: #93c5fd;
-  cursor: not-allowed;
-}
-
-.error-box {
-  background: #fee2e2;
-  color: #b91c1c;
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-  font-weight: bold;
+.mo-link-btn:hover {
+  color: #1d4ed8;
 }
 
 .table-wrapper {
   background: white;
-  border-radius: 14px;
+  border-radius: 12px;
   overflow: auto;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e2e8f0;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-}
-
-thead {
-  background: #0f172a;
-  color: white;
+  text-align: left;
 }
 
 th {
-  padding: 14px;
-  text-align: left;
-  font-size: 14px;
-  white-space: nowrap;
+  background: #0f172a;
+  color: white;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 600;
   border: 1px solid #334155;
+  white-space: nowrap;
 }
+
+.super-header th {
+  text-align: center;
+  font-size: 14px;
+  background: #1e293b;
+}
+
+/* Departmental Column Shading Blocks */
+th.sho-head { background: #1e3a8a; }
+th.tb-head { background: #7c2d12; }
+th.ch-head { background: #065f46; }
 
 td {
   padding: 12px 14px;
-  border: 1px solid #e5e7eb;
-  font-size: 14px;
+  border-bottom: 1px solid #e2e8f0;
+  border-right: 1px solid #f1f5f9;
+  font-size: 13.5px;
+  color: #334155;
   white-space: nowrap;
-  vertical-align: middle;
-}
-
-.mo-cell {
-  background: #f8fafc;
-  text-align: center;
-  font-size: 16px;
-  color: #0f172a;
 }
 
 tr:hover {
   background: #f8fafc;
 }
 
-@media screen and (max-width: 768px) {
-  .search-form {
-    width: 100%;
-    flex-direction: column;
-  }
-  .search-box {
-    width: 100%;
-  }
-  .header-section {
-    flex-direction: column;
-    align-items: flex-start;
-  }
+.mo-cell {
+  background: #f1f5f9;
+  text-align: center;
+  font-size: 15px;
+  font-weight: bold;
+  color: #0f172a;
+  border-right: 1px solid #cbd5e1;
+}
+
+/* Status Badge Formats */
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-block;
+}
+
+.status-badge.completed { background: #dcfce7; color: #15803d; }
+.status-badge.in-process { background: #fef9c3; color: #a16207; }
+.status-badge.yet-to-start { background: #f1f5f9; color: #475569; }
+.status-badge.aggregated { background: #e0f2fe; color: #0369a1; }
+.status-badge.running { background: #fae8ff; color: #a21caf; }
+
+.loading-spinner {
+  padding: 40px;
+  text-align: center;
+  font-size: 16px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.error-box {
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  font-weight: 500;
 }
