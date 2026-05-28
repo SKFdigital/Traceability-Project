@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './Traceability.css'; // Reusing your existing CSS for a consistent look
 
-const API = 'http://localhost:8000'; // Update this to your production backend URL later
+const API = 'https://scm-backend-pshv.onrender.com'; // Update this to your production backend URL later
 
 const TBE = () => {
   const [summaryData, setSummaryData] = useState([]);
