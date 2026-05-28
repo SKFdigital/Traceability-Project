@@ -96,7 +96,7 @@ class ChatbotLog(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 # =======================================================
-#               TRACEABILITY MODULE MODELS
+#                TRACEABILITY MODULE MODELS
 # =======================================================
 
 class JobWorkReport(Base):
@@ -199,5 +199,38 @@ class TraceabilityLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     normalized_mo = Column(String, index=True)
     sync_date = Column(DateTime, default=datetime.utcnow)
-    reconciliation_details = Column(String) # Store JSON or summary of match
-    status = Column(String) # e.g., 'Matched', 'Pending Audit'
+    reconciliation_details = Column(String) 
+    status = Column(String) 
+
+# =======================================================
+#                   TBE MODULE MODELS
+# =======================================================
+
+class TBEMaster(Base):
+    __tablename__ = 'tbe_master'
+    id = Column(Integer, primary_key=True, index=True)
+    source_channel = Column(String)
+    mo_type = Column(String)
+    pc_qty = Column(String)
+    tag_type = Column(String)
+    packaging_details = Column(String)
+    date = Column(Date)
+    shift = Column(Integer)
+    production = Column(Float)
+    cumulative_production = Column(Float)
+    remark = Column(String)
+    end_buffer = Column(Float)
+    towards_packaging = Column(Float)
+    next_station = Column(String)
+    qty1 = Column(Float)
+    qty2 = Column(Float)
+    qty3 = Column(Float)
+    normalized_mo = Column(String, index=True)
+
+class TBELog(Base):
+    __tablename__ = 'tbe_log'
+    id = Column(Integer, primary_key=True, index=True)
+    normalized_mo = Column(String, index=True)
+    sync_date = Column(DateTime, default=datetime.utcnow)
+    reconciliation_details = Column(String) 
+    status = Column(String)
