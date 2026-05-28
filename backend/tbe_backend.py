@@ -1,4 +1,5 @@
 import os
+import time
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +11,7 @@ load_dotenv()
 app = FastAPI()
 
 # ---------------------------------------------------------
-# CORS MIDDLEWARE (Fixes the "Failed to fetch" React error)
+# CORS MIDDLEWARE
 # ---------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
@@ -20,14 +21,19 @@ app.add_middleware(
     allow_headers=["*"],  
 )
 
-# Fetch the Excel URL from .env
 RINGWT_TRANSITBUFFER_URL = os.getenv("RINGWT_TRANSITBUFFERE_URL")
+
+# ---------------------------------------------------------
+# CACHING SYSTEM FOR 22MB FILE
+# ---------------------------------------------------------
+CACHED_DF = None
+LAST_CACHE_TIME = 0
+CACHE_TTL_SECONDS = 600  # 10 minutes before it fetches the Excel file again
 
 # ---------------------------------------------------------
 # HELPER FUNCTIONS
 # ---------------------------------------------------------
 def clean_channel(ch_string):
-    """Extracts only the number from 'CH-03', 'CH-5', 'T-3' for exact matching."""
     if pd.isna(ch_string):
         return None
     match = pd.Series(str(ch_string).upper()).str.extract(r'(\d+)')[0].values
@@ -36,7 +42,6 @@ def clean_channel(ch_string):
     return str(ch_string)
 
 def extract_family(type_string):
-    """Extracts the base numerical family (e.g., OM62132rs -> 62132)."""
     if pd.isna(type_string):
         return ""
     match = pd.Series(str(type_string)).str.extract(r'(\d{3,})')[0].values
@@ -44,48 +49,71 @@ def extract_family(type_string):
         return str(match[0])
     return str(type_string)
 
-def get_processed_tbe_data():
-    """Fetches Excel, cleans data, and groups by Date Proximity."""
+def fetch_and_process_excel():
+    """Does the heavy lifting of downloading and processing."""
     if not RINGWT_TRANSITBUFFER_URL:
         raise ValueError("RINGWT_TRANSITBUFFERE_URL is missing in environment variables.")
+        
+    print("Downloading and processing 22MB Excel file... This may take a moment.")
+    
+    # Load Data (This is the slow part)
+    df = pd.read_excel(RINGWT_TRANSITBUFFER_URL)
+    df.columns = df.columns.str.strip() 
+    
+    # Standardize Columns
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df = df.dropna(subset=['Date']) 
+    
+    df['Clean_Channel'] = df['Ch#'].apply(clean_channel)
+    df['Base_Family'] = df['TYPE'].apply(extract_family)
+    
+    # DATE PROXIMITY LOGIC
+    df = df.sort_values(by=['Clean_Channel', 'Base_Family', 'Date'])
+    df['Date_Diff'] = df.groupby(['Clean_Channel', 'Base_Family'])['Date'].diff().dt.days
+    df['New_Run_Flag'] = (df['Date_Diff'].fillna(0) > 10).astype(int)
+    df['Run_ID'] = df.groupby(['Clean_Channel', 'Base_Family'])['New_Run_Flag'].cumsum()
+    
+    # GENERATE MO
+    df['Generated_MO'] = "MO-CH" + df['Clean_Channel'].astype(str) + "-" + df['Base_Family'].astype(str) + "-R" + (df['Run_ID'] + 1).astype(str)
+    
+    # Clean up NaNs
+    df = df.fillna(0)
+    print("Processing complete. Data cached in memory.")
+    return df
 
+def get_processed_tbe_data(force_refresh=False):
+    """Returns cached data if fresh, otherwise triggers a new fetch."""
+    global CACHED_DF, LAST_CACHE_TIME
+    
+    current_time = time.time()
+    
+    # Use cache if we have it, it's not expired, and we aren't forcing a refresh
+    if CACHED_DF is not None and not force_refresh and (current_time - LAST_CACHE_TIME < CACHE_TTL_SECONDS):
+        return CACHED_DF
+        
+    # Otherwise, do the heavy processing
     try:
-        # 1. Load Data
-        df = pd.read_excel(RINGWT_TRANSITBUFFER_URL)
-        df.columns = df.columns.str.strip() 
-        
-        # 2. Standardize Columns
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df = df.dropna(subset=['Date']) 
-        
-        df['Clean_Channel'] = df['Ch#'].apply(clean_channel)
-        df['Base_Family'] = df['TYPE'].apply(extract_family)
-        
-        # 3. DATE PROXIMITY LOGIC (Group closer dates together)
-        # Sort sequentially by Channel -> Family -> Date
-        df = df.sort_values(by=['Clean_Channel', 'Base_Family', 'Date'])
-        
-        # Calculate days between the current row and the previous row for the same Channel+Family
-        df['Date_Diff'] = df.groupby(['Clean_Channel', 'Base_Family'])['Date'].diff().dt.days
-        
-        # If the gap is greater than 10 days, consider it a NEW Production Run
-        df['New_Run_Flag'] = (df['Date_Diff'].fillna(0) > 10).astype(int)
-        
-        # Cumulative sum creates a unique Run ID (0, 1, 2...) for isolated date clusters
-        df['Run_ID'] = df.groupby(['Clean_Channel', 'Base_Family'])['New_Run_Flag'].cumsum()
-        
-        # 4. GENERATE THE MO NUMBER
-        # Format: MO-CH[Channel]-[Family]-R[Run_ID] (e.g., MO-CH3-6306-R1)
-        df['Generated_MO'] = "MO-CH" + df['Clean_Channel'].astype(str) + "-" + df['Base_Family'].astype(str) + "-R" + (df['Run_ID'] + 1).astype(str)
-        
-        # Clean up NaNs for JSON serialization
-        df = df.fillna(0)
-        
+        df = fetch_and_process_excel()
+        CACHED_DF = df
+        LAST_CACHE_TIME = current_time
         return df
     except Exception as e:
         print(f"Error processing TBE data: {e}")
+        # If fetch fails but we have old cache, serve the old cache as a fallback
+        if CACHED_DF is not None:
+            return CACHED_DF
         return pd.DataFrame()
 
+# ---------------------------------------------------------
+# NEW ENDPOINT: FORCE CACHE REFRESH
+# ---------------------------------------------------------
+@app.get("/refresh_tbe")
+def refresh_cache():
+    """Hit this endpoint to instantly clear the cache and fetch the latest Excel data."""
+    df = get_processed_tbe_data(force_refresh=True)
+    if not df.empty:
+        return {"status": "success", "message": "Cache updated successfully."}
+    return {"status": "error", "message": "Failed to update cache."}
 
 # ---------------------------------------------------------
 # ENDPOINT 1: SUMMARY DASHBOARD (ALL MOs)
@@ -97,7 +125,6 @@ def get_tbe_summary():
     if df.empty:
         return {"status": "error", "message": "Failed to fetch or parse TBE pipeline."}
 
-    # Group by the dynamically generated MO and sum the metrics
     agg_funcs = {
         'Clean_Channel': 'first',
         'Base_Family': 'first',
@@ -127,11 +154,8 @@ def get_tbe_summary():
             "status": "completed"
         })
         
-    # Sort payload so channels display sequentially
     payload = sorted(payload, key=lambda x: (x['channel'], x['base_product']))
-        
     return {"status": "success", "data": payload}
-
 
 # ---------------------------------------------------------
 # ENDPOINT 2: DETAILED MO DRILLDOWN
@@ -143,7 +167,6 @@ def get_tbe_detail(mo_id: str):
     if df.empty:
         return {"status": "error", "message": "Pipeline unavailable."}
         
-    # Filter the dataframe to only show rows for the clicked MO
     filtered_df = df[df['Generated_MO'] == mo_id.strip()]
 
     rows = []
