@@ -6,7 +6,8 @@ class Settings(BaseSettings):
     TRB_MASTER_URL: str
     DGBB_MASTER_URL: str
     TRACEABILITY_MASTER_URL: str
-    MO_DATA_URL: str  
+    MO_DATA_URL: str 
+    RINGWT_TRANSITBUFFERE_URL: str
 
     class Config:
         env_file = ".env"
