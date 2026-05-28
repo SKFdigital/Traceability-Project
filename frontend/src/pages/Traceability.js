@@ -66,14 +66,16 @@ const Traceability = () => {
     (item.base_product && String(item.base_product).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // 2. SORT the data by MO. (Critical to ensure IM and OM of the same MO are next to each other so RowSpan works).
+  // 2. SORT the data by MO, AND THEN by Product Variant. 
+  // This ensures identical product variants sit next to each other so RowSpan works perfectly.
   const sortedSummary = [...filteredSummary].sort((a, b) => {
-    if (a.mo < b.mo) return -1;
-    if (a.mo > b.mo) return 1;
-    return 0;
+    if (a.mo !== b.mo) {
+      return (a.mo || '').localeCompare(b.mo || '');
+    }
+    return String(a.base_product || '').localeCompare(String(b.base_product || ''));
   });
 
-  // 3. Row Span Logic calculates how many identical MOs sit next to each other
+  // 3. Row Span Logic for MO Column
   const getMoRowSpan = (dataArray, currentIndex) => {
     const currentMo = dataArray[currentIndex].mo;
     if (currentIndex > 0 && dataArray[currentIndex - 1].mo === currentMo) {
@@ -81,6 +83,29 @@ const Traceability = () => {
     }
     let span = 1;
     while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo === currentMo) {
+      span++;
+    }
+    return span;
+  };
+
+  // 4. NEW: Row Span Logic for Channel Column (Only groups identical families inside the same MO)
+  const getChannelRowSpan = (dataArray, currentIndex) => {
+    const currentMo = dataArray[currentIndex].mo;
+    const currentFamily = dataArray[currentIndex].base_product;
+    
+    // Check if previous row was exactly the same MO + Variant
+    if (currentIndex > 0 && 
+        dataArray[currentIndex - 1].mo === currentMo && 
+        dataArray[currentIndex - 1].base_product === currentFamily) {
+      return 0; // Already spanned from a row above
+    }
+    
+    let span = 1;
+    while (
+      currentIndex + span < dataArray.length && 
+      dataArray[currentIndex + span].mo === currentMo &&
+      dataArray[currentIndex + span].base_product === currentFamily
+    ) {
       span++;
     }
     return span;
@@ -128,38 +153,39 @@ const Traceability = () => {
       {/* VIEW BLOCK 1: MAIN SUMMARY DASHBOARD */}
       {!loading && !isInitializing && !selectedMoFlow && (
         <div className="table-wrapper">
-          <table>
+          <table className="trace-table">
             <thead>
               <tr className="super-header">
-                <th colSpan="4">Order Metadata</th>
+                <th colSpan="4" className="meta-head">Order Metadata</th>
                 <th colSpan="3" className="sho-head">SHO Department</th>
                 <th colSpan="3" className="tb-head">Transit Buffer</th>
                 <th colSpan="3" className="ch-head">Channel Section (Combined)</th>
-                <th>System Status</th>
+                <th className="meta-head">System Status</th>
               </tr>
-              <tr>
+              <tr className="sub-header">
                 <th>MO Number</th>
                 <th>Product Variant</th>
                 <th>Target Qty</th>
                 <th>Ring Type</th>
-                <th className="sho-head">Qty</th>
-                <th className="sho-head">In Date</th>
-                <th className="sho-head">Out Date</th>
-                <th className="tb-head">Qty</th>
-                <th className="tb-head">In Date</th>
-                <th className="tb-head">Out Date</th>
-                <th className="ch-head">Qty</th>
-                <th className="ch-head">In Date</th>
-                <th className="ch-head">Out Date</th>
+                <th>Qty</th>
+                <th>In Date</th>
+                <th>Out Date</th>
+                <th>Qty</th>
+                <th>In Date</th>
+                <th>Out Date</th>
+                <th>Qty</th>
+                <th>In Date</th>
+                <th>Out Date</th>
                 <th>Tracking Status</th>
               </tr>
             </thead>
             <tbody>
               {sortedSummary.map((row, idx) => {
                 const moSpan = getMoRowSpan(sortedSummary, idx);
+                const channelSpan = getChannelRowSpan(sortedSummary, idx); // Calculated separately!
                 
                 return (
-                  <tr key={idx}>
+                  <tr key={idx} className="data-row">
                     {/* Spanned MO Cell */}
                     {moSpan > 0 && (
                       <td rowSpan={moSpan} className="merged-mo-cell">
@@ -169,14 +195,12 @@ const Traceability = () => {
                       </td>
                     )}
 
-                    {/* IM/OM Separation (Renders normally per row) */}
-                    <td><strong>{row.base_product}</strong></td>
-                    <td style={{ fontWeight: '600', color: '#2c3e50' }}>
-                      {row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}
-                    </td>
-                    <td><strong>{row.component_type}</strong></td>
+                    {/* IM/OM Separation */}
+                    <td className="fw-bold">{row.base_product}</td>
+                    <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
+                    <td className="fw-bold">{row.component_type}</td>
                     
-                    {/* SHO & TB separated per IM/OM line */}
+                    {/* SHO & TB */}
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '-'}</td>
                     <td>{row.sho_in || '-'}</td>
                     <td>{row.sho_out || '-'}</td>
@@ -184,21 +208,21 @@ const Traceability = () => {
                     <td>{row.tb_in || '-'}</td>
                     <td>{row.tb_out || '-'}</td>
                     
-                    {/* Merged Channel Section (Spans across IM/OM rows) */}
-                    {moSpan > 0 && (
+                    {/* Merged Channel Section (Spans ONLY matching Base Products) */}
+                    {channelSpan > 0 && (
                       <>
-                        <td rowSpan={moSpan} className="merged-qty-cell" style={{ fontWeight: '600' }}>
+                        <td rowSpan={channelSpan} className="merged-channel-cell fw-bold">
                           {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}
                         </td>
-                        <td rowSpan={moSpan} className="merged-qty-cell">{row.ch_in || '-'}</td>
-                        <td rowSpan={moSpan} className="merged-qty-cell">{row.ch_out || '-'}</td>
+                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
+                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
                       </>
                     )}
                     
-                    {/* Status rendered per line */}
+                    {/* Status */}
                     <td>
-                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'default'}`}>
-                        {row.status || 'Pending'}
+                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
+                        {row.status || 'In Process'}
                       </span>
                     </td>
                   </tr>
@@ -206,7 +230,7 @@ const Traceability = () => {
               })}
               {sortedSummary.length === 0 && (
                 <tr>
-                  <td colSpan="14" style={{ textAlign: 'center', padding: '30px' }}>
+                  <td colSpan="14" className="empty-state">
                     No matching Production Tracking data frames located.
                   </td>
                 </tr>
@@ -219,9 +243,9 @@ const Traceability = () => {
       {/* VIEW BLOCK 2: TARGET DRILLDOWN DETAILED FLOW */}
       {!loading && selectedMoFlow && selectedMoFlow.flow_data && (
         <div className="table-wrapper">
-          <table>
+          <table className="trace-table">
             <thead>
-              <tr>
+              <tr className="sub-header">
                 <th>MO Reference</th>
                 <th>Department / Specific Location</th>
                 <th>Product / Part Sub Variant</th>
@@ -236,9 +260,9 @@ const Traceability = () => {
               {selectedMoFlow.flow_data.map((row, index) => {
                 const isFirstRow = index === 0;
                 return (
-                  <tr key={index}>
+                  <tr key={index} className="data-row">
                     {isFirstRow && (
-                      <td rowSpan={selectedMoFlow.flow_data.length} className="mo-cell">
+                      <td rowSpan={selectedMoFlow.flow_data.length} className="merged-mo-cell">
                         <strong>{selectedMoFlow.mo}</strong>
                       </td>
                     )}
@@ -249,7 +273,7 @@ const Traceability = () => {
                     <td>{row.qty_in ? Number(row.qty_in).toLocaleString() : 0}</td>
                     <td>{row.qty_out ? Number(row.qty_out).toLocaleString() : 0}</td>
                     <td>
-                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'default'}`}>
+                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
                         {row.status || '-'}
                       </span>
                     </td>
