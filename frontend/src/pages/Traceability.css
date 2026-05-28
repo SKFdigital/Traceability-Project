@@ -25,6 +25,11 @@
   font-size: 14px;
 }
 
+/* FIX: Ensures buttons/inputs don't shrink inside the flex header */
+.control-actions {
+  flex-shrink: 0;
+}
+
 .search-box {
   padding: 10px 16px;
   border-radius: 8px;
@@ -144,6 +149,7 @@ tr:hover {
   font-weight: bold;
   color: #0f172a;
   border-right: 1px solid #cbd5e1;
+  vertical-align: middle;
 }
 
 /* Status Badge Formats */
@@ -160,6 +166,9 @@ tr:hover {
 .status-badge.yet-to-start { background: #f1f5f9; color: #475569; }
 .status-badge.aggregated { background: #e0f2fe; color: #0369a1; }
 .status-badge.running { background: #fae8ff; color: #a21caf; }
+
+/* FIX: Clean grey fallback style for unexpected statuses in drilldown rows */
+.status-badge.default { background: #e2e8f0; color: #475569; }
 
 .loading-spinner {
   padding: 40px;
