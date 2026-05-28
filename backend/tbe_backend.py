@@ -1,26 +1,16 @@
 import os
 import time
 import pandas as pd
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, HTTPException
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-app = FastAPI()
+# Define the router that your main application is looking to import
+router = APIRouter()
 
-# ---------------------------------------------------------
-# CORS MIDDLEWARE
-# ---------------------------------------------------------
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  
-    allow_credentials=True,
-    allow_methods=["*"],  
-    allow_headers=["*"],  
-)
-
+# Fetch the Excel URL from .env
 RINGWT_TRANSITBUFFER_URL = os.getenv("RINGWT_TRANSITBUFFERE_URL")
 
 # ---------------------------------------------------------
@@ -28,7 +18,7 @@ RINGWT_TRANSITBUFFER_URL = os.getenv("RINGWT_TRANSITBUFFERE_URL")
 # ---------------------------------------------------------
 CACHED_DF = None
 LAST_CACHE_TIME = 0
-CACHE_TTL_SECONDS = 600  # 10 minutes before it fetches the Excel file again
+CACHE_TTL_SECONDS = 600  # 10 minutes cache lifetime
 
 # ---------------------------------------------------------
 # HELPER FUNCTIONS
@@ -50,13 +40,13 @@ def extract_family(type_string):
     return str(type_string)
 
 def fetch_and_process_excel():
-    """Does the heavy lifting of downloading and processing."""
+    """Downloads and processes the 22MB spreadsheet file into memory."""
     if not RINGWT_TRANSITBUFFER_URL:
         raise ValueError("RINGWT_TRANSITBUFFERE_URL is missing in environment variables.")
         
     print("Downloading and processing 22MB Excel file... This may take a moment.")
     
-    # Load Data (This is the slow part)
+    # Load Data
     df = pd.read_excel(RINGWT_TRANSITBUFFER_URL)
     df.columns = df.columns.str.strip() 
     
@@ -67,31 +57,29 @@ def fetch_and_process_excel():
     df['Clean_Channel'] = df['Ch#'].apply(clean_channel)
     df['Base_Family'] = df['TYPE'].apply(extract_family)
     
-    # DATE PROXIMITY LOGIC
+    # DATE PROXIMITY LOGIC (Groups production intervals automatically)
     df = df.sort_values(by=['Clean_Channel', 'Base_Family', 'Date'])
     df['Date_Diff'] = df.groupby(['Clean_Channel', 'Base_Family'])['Date'].diff().dt.days
     df['New_Run_Flag'] = (df['Date_Diff'].fillna(0) > 10).astype(int)
     df['Run_ID'] = df.groupby(['Clean_Channel', 'Base_Family'])['New_Run_Flag'].cumsum()
     
-    # GENERATE MO
+    # GENERATE PRIMARY KEY MO
     df['Generated_MO'] = "MO-CH" + df['Clean_Channel'].astype(str) + "-" + df['Base_Family'].astype(str) + "-R" + (df['Run_ID'] + 1).astype(str)
     
-    # Clean up NaNs
+    # Clean up NaNs for clean JSON transmission
     df = df.fillna(0)
-    print("Processing complete. Data cached in memory.")
+    print("Processing complete. Data cached successfully.")
     return df
 
 def get_processed_tbe_data(force_refresh=False):
-    """Returns cached data if fresh, otherwise triggers a new fetch."""
+    """Returns cached data if valid, otherwise updates cache with fresh data."""
     global CACHED_DF, LAST_CACHE_TIME
     
     current_time = time.time()
     
-    # Use cache if we have it, it's not expired, and we aren't forcing a refresh
     if CACHED_DF is not None and not force_refresh and (current_time - LAST_CACHE_TIME < CACHE_TTL_SECONDS):
         return CACHED_DF
         
-    # Otherwise, do the heavy processing
     try:
         df = fetch_and_process_excel()
         CACHED_DF = df
@@ -99,17 +87,15 @@ def get_processed_tbe_data(force_refresh=False):
         return df
     except Exception as e:
         print(f"Error processing TBE data: {e}")
-        # If fetch fails but we have old cache, serve the old cache as a fallback
         if CACHED_DF is not None:
             return CACHED_DF
         return pd.DataFrame()
 
 # ---------------------------------------------------------
-# NEW ENDPOINT: FORCE CACHE REFRESH
+# ENDPOINT: FORCE CACHE REFRESH
 # ---------------------------------------------------------
-@app.get("/refresh_tbe")
+@router.get("/refresh_tbe")
 def refresh_cache():
-    """Hit this endpoint to instantly clear the cache and fetch the latest Excel data."""
     df = get_processed_tbe_data(force_refresh=True)
     if not df.empty:
         return {"status": "success", "message": "Cache updated successfully."}
@@ -118,7 +104,7 @@ def refresh_cache():
 # ---------------------------------------------------------
 # ENDPOINT 1: SUMMARY DASHBOARD (ALL MOs)
 # ---------------------------------------------------------
-@app.get("/tbe_all_mos")
+@router.get("/tbe_all_mos")
 def get_tbe_summary():
     df = get_processed_tbe_data()
     
@@ -160,7 +146,7 @@ def get_tbe_summary():
 # ---------------------------------------------------------
 # ENDPOINT 2: DETAILED MO DRILLDOWN
 # ---------------------------------------------------------
-@app.get("/tbe_report/{mo_id}")
+@router.get("/tbe_report/{mo_id}")
 def get_tbe_detail(mo_id: str):
     df = get_processed_tbe_data()
     
