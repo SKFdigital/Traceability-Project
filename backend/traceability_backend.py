@@ -81,16 +81,27 @@ def parse_date_safe(value):
     except:
         return None
 
+def extract_base_family(item_name):
+    """
+    Extracts the exact sequence of numbers for grouping.
+    Prevents '332211' from being falsely grouped with '33221'.
+    """
+    if pd.isna(item_name):
+        return "UNKNOWN"
+    # Find the first continuous block of numbers
+    match = re.search(r'\d+', str(item_name))
+    return match.group(0) if match else str(item_name).strip()
+
 def parse_product_details(prod_text):
     """
-    Extracts component type but skips the 4-digit product matching 
-    as requested, passing the base product through as-is.
+    Extracts component type and uses Strict Regex to pull the Base Family.
     """
     text = normalize_text(prod_text).upper()
     component = "IM" if "IM" in text or "IR" in text else ("OM" if "OM" in text or "OR" in text else "Assembly")
     
-    # Passing the product string cleanly without regex digit matching
-    base_product = text if text else "Gen Product"
+    # Extract the exact base family number dynamically
+    base_product = extract_base_family(text)
+    
     return base_product, component
 
 def download_excel(url):
@@ -158,19 +169,16 @@ def process_traceability_data():
                 
                 comp_type = "IM" if comp_item_str.startswith("IM") else "OM"
                 
-                # Extract and clean MO
                 raw_mo = clean_mo(row.get("mo#"))
                 if not raw_mo:
                     continue
                 
-                # Apply 4-letter grouping
                 mo_group = get_mo_group(raw_mo)
                 
                 qty_req = clean_nan(row.get("qty req"))
                 final_variant = normalize_text(row.get("finalvariant"))
                 base_prod, _ = parse_product_details(final_variant)
                 
-                # Combine matching MOs using the 4-letter group key
                 sum_key = (mo_group, base_prod, comp_type)
                 
                 if sum_key not in summary_aggregation:
@@ -214,6 +222,7 @@ def process_traceability_data():
                 qty_returned = clean_nan(row.get("qty returned"))
                 status = normalize_text(row.get("current status"))
 
+                # Detailed Row Appending (Maintains Exact Variants)
                 mo_flow_records[mo_group]["rows"].append({
                     "department": "SHO", "product": product_str, "in_date": "",
                     "out_date": str(last_challan_date) if last_challan_date else "",
@@ -239,14 +248,13 @@ def process_traceability_data():
                         s_agg["sho_in_date"] = min(s_agg["sho_in_date"], jw_challan_date) if s_agg["sho_in_date"] else jw_challan_date
                         s_agg["tb_in_date"] = min(s_agg["tb_in_date"], jw_challan_date) if s_agg["tb_in_date"] else jw_challan_date
                 else:
-                    if sum_key not in summary_aggregation:
-                        summary_aggregation[sum_key] = {
-                            "mo": mo_group, "base_product": base_prod, "final_variant": product_str,
-                            "component_type": comp_type, "qty_req": 0,
-                            "sho_qty": qty_approved, "sho_in_date": jw_challan_date, "sho_out_date": last_challan_date,
-                            "tb_qty": qty_returned, "tb_in_date": jw_challan_date, "tb_out_date": last_challan_date,
-                            "ch_qty": 0.0, "ch_in_date": None, "ch_out_date": None,
-                        }
+                    summary_aggregation[sum_key] = {
+                        "mo": mo_group, "base_product": base_prod, "final_variant": product_str,
+                        "component_type": comp_type, "qty_req": 0,
+                        "sho_qty": qty_approved, "sho_in_date": jw_challan_date, "sho_out_date": last_challan_date,
+                        "tb_qty": qty_returned, "tb_in_date": jw_challan_date, "tb_out_date": last_challan_date,
+                        "ch_qty": 0.0, "ch_in_date": None, "ch_out_date": None,
+                    }
 
         # ---------------------------------------------------------
         # 2. PROCESS CHANNELS WITH SUMMED LOGIC
@@ -280,6 +288,7 @@ def process_traceability_data():
                 if mo_group not in mo_flow_records:
                     mo_flow_records[mo_group] = {"mo": mo_group, "rows": []}
 
+                # Detailed Row Appending (Maintains Exact Variants)
                 mo_flow_records[mo_group]["rows"].append({
                     "department": channel_name, "product": prod_str,
                     "in_date": str(date_val) if production > 0 and production == cumulative else "",
@@ -329,36 +338,80 @@ def process_traceability_data():
                     }
 
         # ---------------------------------------------------------
-        # 3. COMPILING FINAL CACHE DATA FRAMES & SORTING
+        # 3. COMPILING FINAL CACHE DATA FRAMES & SORTING 
+        # (Combining IM and OM for the Main Page)
         # ---------------------------------------------------------
-        compiled_summary = []
+        combined_families = {}
+        
+        # Merge IM and OM into a single Bearing representation
         for (mo_group, base_prod, comp_type), s_agg in summary_aggregation.items():
-            if s_agg["sho_qty"] == 0 and s_agg["ch_qty"] == 0:
+            comb_key = (mo_group, base_prod)
+            
+            if comb_key not in combined_families:
+                combined_families[comb_key] = {
+                    "mo": mo_group,
+                    "base_product": base_prod,
+                    "variants_seen": set(),
+                    "qty_req": 0, "sho_qty": 0.0, "tb_qty": 0.0, "ch_qty": 0.0,
+                    "sho_in": None, "sho_out": None, "tb_in": None, "tb_out": None,
+                    "ch_in": None, "ch_out": None,
+                }
+            
+            cf = combined_families[comb_key]
+            
+            # Avoid putting the temp 'Combined Family' label in variants
+            if s_agg["final_variant"] != "Combined Family Channel Grouping":
+                cf["variants_seen"].add(s_agg["final_variant"])
+            
+            # 1 IM + 1 OM = 1 Bearing. Taking the Max ensures the overall channel logic remains accurate.
+            cf["qty_req"] = max(cf["qty_req"], int(s_agg["qty_req"]))
+            cf["sho_qty"] = max(cf["sho_qty"], s_agg["sho_qty"])
+            cf["tb_qty"] = max(cf["tb_qty"], s_agg["tb_qty"])
+            cf["ch_qty"] = max(cf["ch_qty"], s_agg["ch_qty"])
+            
+            # Safe Min/Max logic for dates
+            def update_date(current, new_date, is_min):
+                if not new_date: return current
+                if not current: return new_date
+                return min(current, new_date) if is_min else max(current, new_date)
+
+            cf["sho_in"] = update_date(cf["sho_in"], s_agg["sho_in_date"], True)
+            cf["sho_out"] = update_date(cf["sho_out"], s_agg["sho_out_date"], False)
+            cf["tb_in"] = update_date(cf["tb_in"], s_agg["tb_in_date"], True)
+            cf["tb_out"] = update_date(cf["tb_out"], s_agg["tb_out_date"], False)
+            cf["ch_in"] = update_date(cf["ch_in"], s_agg["ch_in_date"], True)
+            cf["ch_out"] = update_date(cf["ch_out"], s_agg["ch_out_date"], False)
+
+
+        # Push merged dictionary into the final MASTER_CACHE array
+        compiled_summary = []
+        for cf in combined_families.values():
+            if cf["sho_qty"] == 0 and cf["ch_qty"] == 0:
                 calc_status = "Yet to Start"
-            elif s_agg["ch_qty"] >= s_agg["sho_qty"] and s_agg["sho_qty"] > 0:
+            elif cf["ch_qty"] >= cf["sho_qty"] and cf["sho_qty"] > 0:
                 calc_status = "Completed"
             else:
                 calc_status = "In Process"
 
             compiled_summary.append({
-                "mo": mo_group,
-                "base_product": s_agg["base_product"],
-                "final_variant": s_agg["final_variant"],
-                "component_type": comp_type,
-                "qty_req": int(s_agg["qty_req"]),
-                "sho_qty": s_agg["sho_qty"],
-                "sho_in": str(s_agg["sho_in_date"]) if s_agg["sho_in_date"] else "-",
-                "sho_out": str(s_agg["sho_out_date"]) if s_agg["sho_out_date"] else "-",
-                "tb_qty": s_agg["tb_qty"],
-                "tb_in": str(s_agg["tb_in_date"]) if s_agg["tb_in_date"] else "-",
-                "tb_out": str(s_agg["tb_out_date"]) if s_agg["tb_out_date"] else "-",
-                "ch_qty": s_agg["ch_qty"],
-                "ch_in": str(s_agg["ch_in_date"]) if s_agg["ch_in_date"] else "-",
-                "ch_out": str(s_agg["ch_out_date"]) if s_agg["ch_out_date"] else "-",
+                "mo": cf["mo"],
+                "base_product": cf["base_product"],
+                "final_variant": ", ".join(sorted(list(cf["variants_seen"]))) if cf["variants_seen"] else cf["base_product"],
+                "component_type": "Bearing (IM+OM)", # Represents combined row
+                "qty_req": int(cf["qty_req"]),
+                "sho_qty": cf["sho_qty"],
+                "sho_in": str(cf["sho_in"]) if cf["sho_in"] else "-",
+                "sho_out": str(cf["sho_out"]) if cf["sho_out"] else "-",
+                "tb_qty": cf["tb_qty"],
+                "tb_in": str(cf["tb_in"]) if cf["tb_in"] else "-",
+                "tb_out": str(cf["tb_out"]) if cf["tb_out"] else "-",
+                "ch_qty": cf["ch_qty"],
+                "ch_in": str(cf["ch_in"]) if cf["ch_in"] else "-",
+                "ch_out": str(cf["ch_out"]) if cf["ch_out"] else "-",
                 "status": calc_status
             })
 
-        compiled_summary.sort(key=lambda x: (x["mo"], x["base_product"], x["component_type"]))
+        compiled_summary.sort(key=lambda x: (x["mo"], x["base_product"]))
         
         MASTER_CACHE = compiled_summary
         FLOW_CACHE = mo_flow_records
