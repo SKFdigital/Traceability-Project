@@ -12,8 +12,10 @@ import Finance from "./pages/Finance";
 import Logistics from "./pages/Logistics";
 import SupplierChatbot from "./pages/SupplierChatbot";
 
-// Import the NEW unified file
+// Import Traceability
 import Traceability from "./pages/Traceability";
+// Import the NEW TBE Module
+import TBE from "./pages/TBE"; // <-- Added this import
 
 // 🔒 THE BOUNCER
 const ProtectedRoute = ({ children }) => {
@@ -35,8 +37,9 @@ function App() {
         <Route path="/forecasting" element={<ProtectedRoute><Forecasting /></ProtectedRoute>} />
         <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
         
-        {/* NEW UNIFIED TRACEABILITY ROUTE */}
+        {/* TRACEABILITY & TBE ROUTES */}
         <Route path="/traceability" element={<ProtectedRoute><Traceability /></ProtectedRoute>} />
+        <Route path="/tbe" element={<ProtectedRoute><TBE /></ProtectedRoute>} /> {/* <-- New Route Added */}
 
         <Route path="/inventory" element={<ProtectedRoute><Inventory /></ProtectedRoute>} />
         <Route path="/production" element={<ProtectedRoute><Production /></ProtectedRoute>} />
