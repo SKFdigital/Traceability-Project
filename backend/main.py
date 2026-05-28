@@ -13,6 +13,7 @@ from auth import hash_password, verify_password, create_token
 from schemas import RegisterRequest, LoginRequest
 from order_backend_postgres import router as order_router
 from traceability_backend import router as traceability_router
+from tbe_backend import router as tbe_router  # New TBE Module Import
 
 # ================= APP =================
 app = FastAPI(title="AI-Driven SCM Backend API")
@@ -78,6 +79,7 @@ def list_users(db: Session = Depends(get_db)):
 # ================= INCLUDE ROUTERS =================
 app.include_router(order_router)
 app.include_router(traceability_router)
+app.include_router(tbe_router)  # Registered TBE Module Router
 
 # ================= BASE ROOT CONTROLLER =================
 @app.get("/")
