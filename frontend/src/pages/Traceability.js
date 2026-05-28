@@ -46,8 +46,14 @@ const Traceability = () => {
       const res = await fetch(`${API}/traceability_report/${moString.trim()}`);
       if (!res.ok) throw new Error('Could not pull tracking sequence for this production order.');
       const json = await res.json();
+      
       if (json.status === 'success') {
-        setSelectedMoFlow(json.data);
+        // FIX: Safely map backend 'rows' key to frontend 'flow_data' key 
+        // to prevent UI rendering engine failures.
+        setSelectedMoFlow({
+          mo: json.data.mo,
+          flow_data: json.data.rows || []
+        });
       }
     } catch (err) {
       setError(err.message);
@@ -198,7 +204,7 @@ const Traceability = () => {
       )}
 
       {/* VIEW BLOCK 2: TARGET DRILLDOWN DETAILED FLOW */}
-      {!loading && selectedMoFlow && (
+      {!loading && selectedMoFlow && selectedMoFlow.flow_data && (
         <div className="table-wrapper">
           <table>
             <thead>
@@ -227,10 +233,10 @@ const Traceability = () => {
                     <td>{row.product || '-'}</td>
                     <td>{row.in_date || '-'}</td>
                     <td>{row.out_date || '-'}</td>
-                    <td>{row.qty_in?.toLocaleString()}</td>
-                    <td>{row.qty_out?.toLocaleString()}</td>
+                    <td>{row.qty_in ? row.qty_in.toLocaleString() : 0}</td>
+                    <td>{row.qty_out ? row.qty_out.toLocaleString() : 0}</td>
                     <td>
-                      <span className={`status-badge ${row.status?.toLowerCase().replace(' ', '-')}`}>
+                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'default'}`}>
                         {row.status || '-'}
                       </span>
                     </td>
