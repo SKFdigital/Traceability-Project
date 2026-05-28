@@ -48,8 +48,6 @@ const Traceability = () => {
       const json = await res.json();
       
       if (json.status === 'success') {
-        // FIX: Safely map backend 'rows' key to frontend 'flow_data' key 
-        // to prevent UI rendering engine failures.
         setSelectedMoFlow({
           mo: json.data.mo,
           flow_data: json.data.rows || []
@@ -63,15 +61,15 @@ const Traceability = () => {
   };
 
   const filteredSummary = summaryData.filter(item => 
-    item.mo.toLowerCase().includes(search.toLowerCase()) ||
-    item.base_product.toLowerCase().includes(search.toLowerCase())
+    (item.mo && item.mo.toLowerCase().includes(search.toLowerCase())) ||
+    (item.base_product && String(item.base_product).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // Lookahead utility ONLY for the MO number column now
+  // Lookahead utility calculates row spans for identical MO numbers
   const getMoRowSpan = (dataArray, currentIndex) => {
     const currentMo = dataArray[currentIndex].mo;
     if (currentIndex > 0 && dataArray[currentIndex - 1].mo === currentMo) {
-      return 0;
+      return 0; // Already rendered in a previous row's span
     }
     let span = 1;
     while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo === currentMo) {
@@ -133,7 +131,7 @@ const Traceability = () => {
               </tr>
               <tr>
                 <th>MO Number</th>
-                <th>Product (4-Digit Family)</th>
+                <th>Product Variant</th>
                 <th>Target Qty</th>
                 <th>Ring Type</th>
                 <th className="sho-head">Qty</th>
@@ -154,7 +152,7 @@ const Traceability = () => {
                 
                 return (
                   <tr key={idx}>
-                    {/* ONLY the MO cell spans vertically now */}
+                    {/* Spanned MO Cell */}
                     {moSpan > 0 && (
                       <td rowSpan={moSpan} className="merged-mo-cell">
                         <button className="mo-link-btn" onClick={() => handleViewDetail(row.mo)}>
@@ -163,29 +161,36 @@ const Traceability = () => {
                       </td>
                     )}
 
-                    {/* These render individually per IM/OM row */}
+                    {/* IM/OM Separation (Renders normally per row) */}
                     <td><strong>{row.base_product}</strong></td>
                     <td style={{ fontWeight: '600', color: '#2c3e50' }}>
-                      {row.qty_req > 0 ? row.qty_req.toLocaleString() : '-'}
+                      {row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}
                     </td>
                     <td><strong>{row.component_type}</strong></td>
                     
-                    {/* Standard Data */}
-                    <td>{row.sho_qty.toLocaleString()}</td>
-                    <td>{row.sho_in}</td>
-                    <td>{row.sho_out}</td>
-                    <td>{row.tb_qty.toLocaleString()}</td>
-                    <td>{row.tb_in}</td>
-                    <td>{row.tb_out}</td>
+                    {/* SHO & TB separated per IM/OM line */}
+                    <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '-'}</td>
+                    <td>{row.sho_in || '-'}</td>
+                    <td>{row.sho_out || '-'}</td>
+                    <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '-'}</td>
+                    <td>{row.tb_in || '-'}</td>
+                    <td>{row.tb_out || '-'}</td>
                     
-                    {/* This Channel data will naturally be identical for IM/OM if aggregated correctly in backend */}
-                    <td>{row.ch_qty.toLocaleString()}</td>
-                    <td>{row.ch_in}</td>
-                    <td>{row.ch_out}</td>
+                    {/* NEW: Merged Channel Section (Spans across IM/OM rows) */}
+                    {moSpan > 0 && (
+                      <>
+                        <td rowSpan={moSpan} className="merged-qty-cell">
+                          {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}
+                        </td>
+                        <td rowSpan={moSpan} className="merged-qty-cell">{row.ch_in || '-'}</td>
+                        <td rowSpan={moSpan} className="merged-qty-cell">{row.ch_out || '-'}</td>
+                      </>
+                    )}
                     
+                    {/* Status rendered per line so you can see if IM or OM is specifically delayed */}
                     <td>
-                      <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
-                        {row.status}
+                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'default'}`}>
+                        {row.status || 'Pending'}
                       </span>
                     </td>
                   </tr>
@@ -233,8 +238,8 @@ const Traceability = () => {
                     <td>{row.product || '-'}</td>
                     <td>{row.in_date || '-'}</td>
                     <td>{row.out_date || '-'}</td>
-                    <td>{row.qty_in ? row.qty_in.toLocaleString() : 0}</td>
-                    <td>{row.qty_out ? row.qty_out.toLocaleString() : 0}</td>
+                    <td>{row.qty_in ? Number(row.qty_in).toLocaleString() : 0}</td>
+                    <td>{row.qty_out ? Number(row.qty_out).toLocaleString() : 0}</td>
                     <td>
                       <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'default'}`}>
                         {row.status || '-'}
