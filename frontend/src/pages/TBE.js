@@ -30,7 +30,7 @@ const TBE = () => {
         setTimeout(fetchSummaryDashboard, 4000);
       } else if (json.status === 'success') {
         setIsInitializing(false);
-        setSummaryData(json.data);
+        setSummaryData(json.data || []);
       }
     } catch (err) {
       setError(err.message);
@@ -48,9 +48,11 @@ const TBE = () => {
       const json = await res.json();
       
       if (json.status === 'success') {
+        // FIXED: Checks if data is sent directly as an array or wrapped in a timeline object
+        const flowArray = Array.isArray(json.data) ? json.data : (json.data.timeline || []);
         setSelectedMoFlow({
-          mo: json.data.mo,
-          flow_data: json.data.timeline || [] 
+          mo: moString,
+          flow_data: flowArray
         });
       }
     } catch (err) {
@@ -60,13 +62,13 @@ const TBE = () => {
     }
   };
 
-  // 1. Filter using the EXACT keys from the backend: 'mo' and 'final_variant'
+  // Filter using backend keys
   const filteredSummary = summaryData.filter(item => 
     (item.mo && String(item.mo).toLowerCase().includes(search.toLowerCase())) ||
     (item.final_variant && String(item.final_variant).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // 2. Sort by 'mo' and 'final_variant'
+  // Sort by 'mo' and 'final_variant'
   const sortedSummary = [...filteredSummary].sort((a, b) => {
     if (a.mo !== b.mo) {
       return (a.mo || '').localeCompare(b.mo || '');
@@ -74,7 +76,7 @@ const TBE = () => {
     return String(a.final_variant || '').localeCompare(String(b.final_variant || ''));
   });
 
-  // 3. Row Span Logic for MO Column
+  // Row Span Logic (ONLY for the first MO column to prevent HTML grid breaking)
   const getMoRowSpan = (dataArray, currentIndex) => {
     const currentMo = dataArray[currentIndex].mo;
     if (currentIndex > 0 && dataArray[currentIndex - 1].mo === currentMo) {
@@ -82,28 +84,6 @@ const TBE = () => {
     }
     let span = 1;
     while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo === currentMo) {
-      span++;
-    }
-    return span;
-  };
-
-  // 4. Row Span Logic for Channel Column
-  const getChannelRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo;
-    const currentFamily = dataArray[currentIndex].final_variant;
-    
-    if (currentIndex > 0 && 
-        dataArray[currentIndex - 1].mo === currentMo && 
-        dataArray[currentIndex - 1].final_variant === currentFamily) {
-      return 0; 
-    }
-    
-    let span = 1;
-    while (
-      currentIndex + span < dataArray.length && 
-      dataArray[currentIndex + span].mo === currentMo &&
-      dataArray[currentIndex + span].final_variant === currentFamily
-    ) {
       span++;
     }
     return span;
@@ -157,7 +137,7 @@ const TBE = () => {
                 <th colSpan="4" className="meta-head">Order Metadata</th>
                 <th colSpan="2" className="sho-head">SHO Department</th>
                 <th colSpan="2" className="tb-head">Transit Buffer</th>
-                <th colSpan="3" className="ch-head">Channel Section (Combined)</th>
+                <th colSpan="3" className="ch-head">Channel Section</th>
                 <th className="meta-head">System Status</th>
               </tr>
               <tr className="sub-header">
@@ -178,7 +158,6 @@ const TBE = () => {
             <tbody>
               {sortedSummary.map((row, idx) => {
                 const moSpan = getMoRowSpan(sortedSummary, idx);
-                const channelSpan = getChannelRowSpan(sortedSummary, idx);
                 
                 return (
                   <tr key={idx} className="data-row">
@@ -191,30 +170,24 @@ const TBE = () => {
                       </td>
                     )}
 
-                    {/* Meta Section - Using matched keys */}
+                    {/* Meta Section */}
                     <td className="fw-bold">{row.final_variant || '-'}</td>
                     <td className="qty-cell">{row.qty_req && row.qty_req !== "-" ? Number(row.qty_req).toLocaleString() : '-'}</td>
                     <td className="fw-bold">{row.component_type || '-'}</td>
                     
-                    {/* SHO & TB - Using matched keys */}
+                    {/* SHO & TB */}
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '-'}</td>
                     <td>{row.sho_in || '-'}</td>
                     
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '-'}</td>
                     <td>{row.tb_out || '-'}</td>
                     
-                    {/* Merged Channel Section - Using matched keys */}
-                    {channelSpan > 0 && (
-                      <>
-                        <td rowSpan={channelSpan} className="merged-channel-cell fw-bold">
-                          {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}
-                        </td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
-                      </>
-                    )}
+                    {/* FIXED: Standard Channel Cells (No complex RowSpans to break layout) */}
+                    <td className="fw-bold">{row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}</td>
+                    <td>{row.ch_in || '-'}</td>
+                    <td>{row.ch_out || '-'}</td>
                     
-                    {/* Status - Using matched keys */}
+                    {/* Status */}
                     <td>
                       <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
                         {row.status || 'In Process'}
@@ -260,7 +233,6 @@ const TBE = () => {
                         <strong>{selectedMoFlow.mo}</strong>
                       </td>
                     )}
-                    {/* Detailed view also needs the updated keys */}
                     <td>{row.final_variant || '-'}</td>
                     <td><strong>{row.component_type || '-'}</strong></td>
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : 0}</td>
