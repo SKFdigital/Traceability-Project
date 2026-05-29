@@ -78,6 +78,7 @@ const TBE = () => {
     }
     return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
   });
+
 // 3. Row Span Logic for MO Column
   const getMoRowSpan = (dataArray, currentIndex) => {
     const currentMo = dataArray[currentIndex].mo_number;
