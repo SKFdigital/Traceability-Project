@@ -48,13 +48,14 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
         email=data.email,
         password_hash=hash_password(data.password),
         role=data.role,
-        is_active=True,
+        is_active=1,  # CHANGE THIS: Use 1 (Integer) instead of True (Boolean)
         created_at=datetime.utcnow(),
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     return {"message": "User registered successfully", "user_id": user.id}
+
 
 @app.post("/login")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
