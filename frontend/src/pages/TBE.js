@@ -78,12 +78,11 @@ const TBE = () => {
     }
     return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
   });
-
-  // 3. Row Span Logic for MO Column
+// 3. Row Span Logic for MO Column
   const getMoRowSpan = (dataArray, currentIndex) => {
     const currentMo = dataArray[currentIndex].mo_number;
     if (currentIndex > 0 && dataArray[currentIndex - 1].mo_number === currentMo) {
-      return 0; // Already spanned from a row above
+      return 0; 
     }
     let span = 1;
     while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo_number === currentMo) {
@@ -92,28 +91,28 @@ const TBE = () => {
     return span;
   };
 
-  // 4. Row Span Logic for Channel Column (Only groups identical families inside the same MO)
+  // 4. Row Span Logic for Channel Column (Only groups identical variants inside the same MO)
   const getChannelRowSpan = (dataArray, currentIndex) => {
     const currentMo = dataArray[currentIndex].mo_number;
-    const currentFamily = dataArray[currentIndex].product_variant;
+    const currentVariant = dataArray[currentIndex].product_variant;
     
-    // Check if previous row was exactly the same MO + Variant
     if (currentIndex > 0 && 
         dataArray[currentIndex - 1].mo_number === currentMo && 
-        dataArray[currentIndex - 1].product_variant === currentFamily) {
-      return 0; // Already spanned from a row above
+        dataArray[currentIndex - 1].product_variant === currentVariant) {
+      return 0; 
     }
     
     let span = 1;
     while (
       currentIndex + span < dataArray.length && 
       dataArray[currentIndex + span].mo_number === currentMo &&
-      dataArray[currentIndex + span].product_variant === currentFamily
+      dataArray[currentIndex + span].product_variant === currentVariant
     ) {
       span++;
     }
     return span;
   };
+  
 
   return (
     <div className="traceability-container">
