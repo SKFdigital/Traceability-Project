@@ -1,13 +1,11 @@
-# FINAL `tbe_backend.py`
-
 from fastapi import APIRouter, HTTPException
 import pandas as pd
 import requests
 import io
 import threading
 import time
-import math
 import re
+import math
 from datetime import datetime
 from settings import settings
 
@@ -18,14 +16,17 @@ router = APIRouter()
 # =========================================================
 MASTER_CACHE = []
 FLOW_CACHE = {}
+
 LAST_REFRESH = None
 IS_UPDATING = False
+
 CACHE_DURATION_MINUTES = 5
 
 # =========================================================
 # HELPERS
 # =========================================================
 def clean_mo(value):
+
     if pd.isna(value):
         return None
 
@@ -37,25 +38,22 @@ def clean_mo(value):
         .replace(".0", "")
     )
 
-    if val in ["NAN", "-", "...", ""] or len(val) < 4:
+    if val in ["", "-", "...", "NAN"]:
         return None
 
     return val
 
 
 def normalize_text(value):
+
     if pd.isna(value):
         return ""
 
-    return (
-        str(value)
-        .strip()
-        .upper()
-        .replace("-", " ")
-    )
+    return str(value).strip().upper()
 
 
 def clean_channel(value):
+
     if pd.isna(value):
         return ""
 
@@ -68,34 +66,36 @@ def clean_channel(value):
 
 
 def clean_nan(value):
+
     try:
-        if pd.isna(value):
+
+        if (
+            pd.isna(value)
+            or str(value).strip().lower()
+            in ["nan", "-", "...", ""]
+        ):
             return 0.0
 
-        val = str(value).strip().lower()
+        val = float(value)
 
-        if val in ["nan", "-", "...", ""]:
+        if math.isnan(val):
             return 0.0
 
-        f = float(value)
-
-        if math.isnan(f):
-            return 0.0
-
-        return f
+        return val
 
     except:
         return 0.0
 
 
 def parse_date_safe(value):
+
     try:
-        if pd.isna(value):
-            return None
 
-        val = str(value).strip().lower()
-
-        if val in ["nan", "nat", "", "-"]:
+        if (
+            pd.isna(value)
+            or str(value).strip().lower()
+            in ["nan", "nat", "", "-"]
+        ):
             return None
 
         parsed = pd.to_datetime(
@@ -114,42 +114,48 @@ def parse_date_safe(value):
 
 
 # =========================================================
-# FAMILY & TYPE EXTRACTION
+# FAMILY EXTRACTION
 # =========================================================
 def extract_family(product_name):
 
     text = normalize_text(product_name)
 
-    match = re.search(r"\b(\d{4,5})\b", text)
+    # remove IM / OM
+    text = re.sub(r"^(IM|OM)", "", text)
+
+    # extract first family
+    match = re.search(r"(\d{3,5})", text)
 
     if match:
         return match.group(1)
 
-    return text
+    return None
 
 
-def extract_component(product_name):
+def get_component(product_name):
 
     text = normalize_text(product_name)
 
-    if "IM" in text or "IR" in text:
+    if text.startswith("IM"):
         return "IM"
 
-    if "OM" in text or "OR" in text:
+    if text.startswith("OM"):
         return "OM"
 
-    return "ASSEMBLY"
+    return "NA"
 
 
 # =========================================================
-# EXCEL LOADERS
+# EXCEL HELPERS
 # =========================================================
 def download_excel(url):
 
     response = requests.get(url)
 
     if response.status_code != 200:
-        raise Exception(f"Failed downloading excel from {url}")
+        raise Exception(
+            f"Failed downloading excel from {url}"
+        )
 
     return io.BytesIO(response.content)
 
@@ -157,6 +163,7 @@ def download_excel(url):
 def load_excel_sheets(url):
 
     try:
+
         excel_data = download_excel(url)
 
         xls = pd.ExcelFile(excel_data)
@@ -166,7 +173,11 @@ def load_excel_sheets(url):
         for sheet in xls.sheet_names:
 
             try:
-                df = pd.read_excel(xls, sheet_name=sheet)
+
+                df = pd.read_excel(
+                    xls,
+                    sheet_name=sheet
+                )
 
                 df.columns = [
                     str(c).strip().lower()
@@ -176,19 +187,26 @@ def load_excel_sheets(url):
                 sheets[sheet] = df
 
             except Exception as e:
-                print(f"Error reading sheet [{sheet}] : {str(e)}")
+
+                print(
+                    f"Error reading [{sheet}] : {e}"
+                )
 
         return sheets
 
     except Exception as e:
-        print(f"Failed loading workbook : {str(e)}")
+
+        print(
+            f"Workbook load failed : {e}"
+        )
+
         return {}
 
 
 # =========================================================
 # MAIN ENGINE
 # =========================================================
-def process_tbe_dashboard_data():
+def process_tbe_dashboard():
 
     global MASTER_CACHE
     global FLOW_CACHE
@@ -200,13 +218,7 @@ def process_tbe_dashboard_data():
 
     IS_UPDATING = True
 
-    print(f"[{datetime.now()}] TBE ENGINE STARTED")
-
     try:
-
-        transit_sheets = load_excel_sheets(
-            settings.RINGWT_TRANSITBUFFER_URL
-        )
 
         trb_sheets = load_excel_sheets(
             settings.TRB_MASTER_URL
@@ -216,57 +228,42 @@ def process_tbe_dashboard_data():
             settings.DGBB_MASTER_URL
         )
 
-        # =====================================================
-        # STORAGE
-        # =====================================================
+        tb_sheets = load_excel_sheets(
+            settings.RINGWT_TRANSITBUFFER_URL
+        )
+
         summary_aggregation = {}
 
-        flow_records = {}
+        flow_cache = {}
 
-        channel_family_map = {}
-
-        variant_max_tracker = {}
+        channel_rows = []
 
         # =====================================================
-        # STEP 1 : CHANNEL SHEETS = MASTER SOURCE
+        # STEP 1 : CHANNEL PROCESSING
         # =====================================================
-        all_channel_sheets = {
+        all_channels = {
             **trb_sheets,
             **dgbb_sheets
         }
 
-        for sheet_name, df in all_channel_sheets.items():
+        for sheet_name, df in all_channels.items():
 
-            mo_col = next(
-                (c for c in ["mo", "mo#"] if c in df.columns),
-                None
+            mo_col = (
+                "mo"
+                if "mo" in df.columns
+                else "mo#"
             )
 
-            type_col = next(
-                (
-                    c
-                    for c in [
-                        "type",
-                        "product",
-                        "product variant"
-                    ]
-                    if c in df.columns
-                ),
-                None
-            )
+            type_col = None
 
-            ch_col = next(
-                (
-                    c
-                    for c in [
-                        "channel",
-                        "ch#",
-                        "channel no"
-                    ]
-                    if c in df.columns
-                ),
-                None
-            )
+            for c in [
+                "type",
+                "product",
+                "product variant"
+            ]:
+                if c in df.columns:
+                    type_col = c
+                    break
 
             if not mo_col or not type_col:
                 continue
@@ -286,10 +283,19 @@ def process_tbe_dashboard_data():
 
                 family = extract_family(product)
 
-                component = extract_component(product)
+                if not family:
+                    continue
+
+                component = get_component(product)
 
                 channel = clean_channel(
-                    row.get(ch_col)
+                    row.get("channel")
+                    or row.get("ch#")
+                    or row.get("channel no")
+                )
+
+                row_date = parse_date_safe(
+                    row.get("date")
                 )
 
                 production = clean_nan(
@@ -300,182 +306,135 @@ def process_tbe_dashboard_data():
                     row.get("cumulative production")
                 )
 
-                row_date = parse_date_safe(
-                    row.get("date")
-                )
-
-                # =================================================
-                # FLOW RECORDS
-                # =================================================
-                if raw_mo not in flow_records:
-                    flow_records[raw_mo] = {
-                        "mo": raw_mo,
-                        "timeline": []
-                    }
-
-                flow_records[raw_mo]["timeline"].append({
-                    "department": sheet_name,
-                    "product": product,
-                    "channel": channel,
-                    "date": str(row_date) if row_date else "-",
-                    "production": production,
-                    "cumulative": cumulative
-                })
-
-                # =================================================
-                # CHANNEL FAMILY MAP
-                # =================================================
-                if channel and family and row_date:
-
-                    map_key = (
-                        channel,
-                        family,
-                        component
-                    )
-
-                    if map_key not in channel_family_map:
-                        channel_family_map[map_key] = []
-
-                    channel_family_map[map_key].append({
-                        "mo": raw_mo,
-                        "date": row_date
-                    })
-
-                # =================================================
-                # MAX VARIANT TRACKING
-                # =================================================
-                v_key = (
+                agg_key = (
                     raw_mo,
                     family,
-                    component,
-                    product
+                    component
                 )
 
-                if v_key not in variant_max_tracker:
-                    variant_max_tracker[v_key] = {
-                        "max_cum": 0.0,
-                        "min_date": None,
-                        "max_date": None
+                if agg_key not in summary_aggregation:
+
+                    summary_aggregation[agg_key] = {
+
+                        "mo": raw_mo,
+
+                        "family": family,
+
+                        "component": component,
+
+                        "sho_qty": 0.0,
+
+                        "tb_qty": 0.0,
+
+                        "tb_out": None,
+
+                        "ch_qty": 0.0,
+
+                        "ch_in": None,
+
+                        "ch_out": None
                     }
 
-                v_meta = variant_max_tracker[v_key]
+                agg = summary_aggregation[agg_key]
 
-                if cumulative > v_meta["max_cum"]:
-                    v_meta["max_cum"] = cumulative
+                # IMPORTANT
+                # family total logic
+                if cumulative > agg["ch_qty"]:
+                    agg["ch_qty"] = cumulative
 
                 if row_date:
 
                     if (
-                        not v_meta["min_date"]
-                        or row_date < v_meta["min_date"]
+                        agg["ch_in"] is None
+                        or row_date < agg["ch_in"]
                     ):
-                        v_meta["min_date"] = row_date
+                        agg["ch_in"] = row_date
 
                     if (
-                        not v_meta["max_date"]
-                        or row_date > v_meta["max_date"]
+                        agg["ch_out"] is None
+                        or row_date > agg["ch_out"]
                     ):
-                        v_meta["max_date"] = row_date
+                        agg["ch_out"] = row_date
 
-        # =====================================================
-        # STEP 2 : FAMILY AGGREGATION
-        # =====================================================
-        for (
-            raw_mo,
-            family,
-            component,
-            product
-        ), v_meta in variant_max_tracker.items():
+                channel_rows.append({
 
-            agg_key = (
-                raw_mo,
-                family,
-                component
-            )
-
-            if agg_key not in summary_aggregation:
-
-                summary_aggregation[agg_key] = {
                     "mo": raw_mo,
+
                     "family": family,
+
                     "component": component,
 
-                    "sho_qty": 0.0,
-                    "tb_qty": 0.0,
-                    "tb_out": None,
+                    "channel": channel,
 
-                    "ch_qty": 0.0,
-                    "ch_in": None,
-                    "ch_out": None
-                }
+                    "date": row_date,
 
-            agg = summary_aggregation[agg_key]
+                    "production": production,
 
-            # IMPORTANT:
-            # SUM OF MAX CUMULATIVE OF ALL SUB VARIANTS
-            agg["ch_qty"] += v_meta["max_cum"]
+                    "cumulative": cumulative,
 
-            if v_meta["min_date"]:
+                    "product": product,
 
-                if (
-                    not agg["ch_in"]
-                    or v_meta["min_date"] < agg["ch_in"]
-                ):
-                    agg["ch_in"] = v_meta["min_date"]
+                    "department": sheet_name
+                })
 
-            if v_meta["max_date"]:
+                if raw_mo not in flow_cache:
 
-                if (
-                    not agg["ch_out"]
-                    or v_meta["max_date"] > agg["ch_out"]
-                ):
-                    agg["ch_out"] = v_meta["max_date"]
+                    flow_cache[raw_mo] = {
+                        "mo": raw_mo,
+                        "timeline": []
+                    }
+
+                flow_cache[raw_mo]["timeline"].append({
+
+                    "department": sheet_name,
+
+                    "product": product,
+
+                    "channel": channel,
+
+                    "date": (
+                        str(row_date)
+                        if row_date
+                        else "-"
+                    ),
+
+                    "production": production,
+
+                    "cumulative": cumulative
+                })
 
         # =====================================================
-        # STEP 3 : TRANSIT BUFFER MATCHING
+        # STEP 2 : TRANSIT BUFFER MAPPING
         # =====================================================
-        for sheet_name, df in transit_sheets.items():
+        for sheet_name, df in tb_sheets.items():
 
-            ch_col = next(
-                (
-                    c
-                    for c in [
-                        "channel",
-                        "ch#",
-                        "ch"
-                    ]
-                    if c in df.columns
-                ),
-                None
+            ch_col = None
+
+            for c in [
+                "ch#",
+                "channel",
+                "ch"
+            ]:
+                if c in df.columns:
+                    ch_col = c
+                    break
+
+            if not ch_col:
+                continue
+
+            type_col = (
+                "type"
+                if "type" in df.columns
+                else None
             )
 
-            type_col = next(
-                (
-                    c
-                    for c in [
-                        "type",
-                        "product"
-                    ]
-                    if c in df.columns
-                ),
-                None
+            qty_col = (
+                "no of rings"
+                if "no of rings" in df.columns
+                else None
             )
 
-            qty_col = next(
-                (
-                    c
-                    for c in [
-                        "no of rings",
-                        "qty"
-                    ]
-                    if c in df.columns
-                ),
-                None
-            )
-
-            date_col = "date" if "date" in df.columns else None
-
-            if not ch_col or not type_col or not qty_col:
+            if not type_col or not qty_col:
                 continue
 
             for _, row in df.iterrows():
@@ -488,85 +447,89 @@ def process_tbe_dashboard_data():
                     row.get(type_col)
                 )
 
-                tb_family = extract_family(tb_product)
+                tb_family = extract_family(
+                    tb_product
+                )
 
-                tb_component = extract_component(tb_product)
+                if not tb_family:
+                    continue
+
+                tb_component = get_component(
+                    tb_product
+                )
 
                 tb_qty = clean_nan(
                     row.get(qty_col)
                 )
 
                 tb_date = parse_date_safe(
-                    row.get(date_col)
+                    row.get("date")
                 )
-
-                if not tb_channel:
-                    continue
 
                 if tb_qty <= 0:
                     continue
 
-                # =================================================
-                # MATCH EXISTING CHANNEL ONLY
-                # =================================================
-                possible_matches = channel_family_map.get(
-                    (
-                        tb_channel,
-                        tb_family,
-                        tb_component
-                    ),
-                    []
-                )
+                # closest matching
+                possible_matches = [
+
+                    x for x in channel_rows
+
+                    if (
+                        x["channel"] == tb_channel
+                        and
+                        x["family"] == tb_family
+                        and
+                        x["component"] == tb_component
+                    )
+                ]
 
                 if not possible_matches:
                     continue
 
-                # =================================================
-                # CLOSEST DATE MATCH
-                # =================================================
                 if tb_date:
 
                     best_match = min(
+
                         possible_matches,
-                        key=lambda x: abs(
-                            (x["date"] - tb_date).days
+
+                        key=lambda x:
+                        abs(
+                            (
+                                x["date"]
+                                - tb_date
+                            ).days
                         )
+                        if x["date"]
+                        else 99999
                     )
 
                 else:
+
                     best_match = possible_matches[-1]
 
                 agg_key = (
                     best_match["mo"],
-                    tb_family,
-                    tb_component
+                    best_match["family"],
+                    best_match["component"]
                 )
 
-                # IMPORTANT:
-                # ONLY UPDATE EXISTING ROWS
-                # NEVER CREATE NEW ROWS
                 if agg_key not in summary_aggregation:
                     continue
 
-                summary_aggregation[agg_key]["sho_qty"] += tb_qty
-                summary_aggregation[agg_key]["tb_qty"] += tb_qty
+                agg = summary_aggregation[agg_key]
+
+                agg["tb_qty"] += tb_qty
 
                 if tb_date:
 
-                    curr_out = summary_aggregation[
-                        agg_key
-                    ]["tb_out"]
-
                     if (
-                        not curr_out
-                        or tb_date > curr_out
+                        agg["tb_out"] is None
+                        or tb_date > agg["tb_out"]
                     ):
-                        summary_aggregation[
-                            agg_key
-                        ]["tb_out"] = tb_date
+                        agg["tb_out"] = tb_date
 
         # =====================================================
-        # STEP 4 : FINAL OUTPUT
+        # STEP 3 : FINAL SUMMARY
         # =====================================================
         compiled_summary = []
 
@@ -576,10 +539,20 @@ def process_tbe_dashboard_data():
             component
         ), agg in summary_aggregation.items():
 
-            if agg["sho_qty"] == 0 and agg["ch_qty"] == 0:
+            if not family:
+                continue
+
+            # remove empty junk rows
+            if (
+                agg["ch_qty"] <= 0
+                and agg["tb_qty"] <= 0
+            ):
+                continue
+
+            if agg["ch_qty"] <= 0:
                 status = "Yet To Start"
 
-            elif agg["ch_qty"] >= agg["sho_qty"]:
+            elif agg["tb_qty"] >= agg["ch_qty"]:
                 status = "Completed"
 
             else:
@@ -593,12 +566,13 @@ def process_tbe_dashboard_data():
 
                 "component_type": component,
 
-                "qty_req": int(agg["sho_qty"]),
+                "qty_req": int(agg["tb_qty"]),
 
-                "sho_qty": agg["sho_qty"],
+                "sho_qty": int(agg["tb_qty"]),
+
                 "sho_in": "-",
 
-                "tb_qty": agg["tb_qty"],
+                "tb_qty": int(agg["tb_qty"]),
 
                 "tb_out": (
                     str(agg["tb_out"])
@@ -606,7 +580,7 @@ def process_tbe_dashboard_data():
                     else "-"
                 ),
 
-                "ch_qty": agg["ch_qty"],
+                "ch_qty": int(agg["ch_qty"]),
 
                 "ch_in": (
                     str(agg["ch_in"])
@@ -624,36 +598,53 @@ def process_tbe_dashboard_data():
             })
 
         compiled_summary.sort(
+
             key=lambda x: (
+
                 x["mo"],
+
                 x["final_variant"],
+
                 x["component_type"]
             )
         )
 
         MASTER_CACHE = compiled_summary
-        FLOW_CACHE = flow_records
+
+        FLOW_CACHE = flow_cache
+
         LAST_REFRESH = datetime.now()
 
-        print(f"[{datetime.now()}] TBE CACHE READY")
+        print(
+            f"[{datetime.now()}] "
+            f"TBE CACHE REFRESHED"
+        )
 
     except Exception as e:
-        print(f"CRITICAL TBE ENGINE ERROR : {str(e)}")
+
+        print(
+            f"TBE ENGINE ERROR : {e}"
+        )
 
     finally:
+
         IS_UPDATING = False
 
 
 # =========================================================
-# BACKGROUND REFRESH
+# BACKGROUND THREAD
 # =========================================================
 def background_refresh_loop():
 
-    process_tbe_dashboard_data()
+    process_tbe_dashboard()
 
     while True:
-        time.sleep(CACHE_DURATION_MINUTES * 60)
-        process_tbe_dashboard_data()
+
+        time.sleep(
+            CACHE_DURATION_MINUTES * 60
+        )
+
+        process_tbe_dashboard()
 
 
 threading.Thread(
@@ -663,22 +654,17 @@ threading.Thread(
 
 
 # =========================================================
-# ROUTES
+# API
 # =========================================================
 @router.get("/traceability_all_mos")
 def get_all_mos():
 
-    if not LAST_REFRESH and not MASTER_CACHE:
-
-        return {
-            "status": "initializing",
-            "message": "TBE engine warming up...",
-            "data": []
-        }
-
     return {
+
         "status": "success",
+
         "last_updated": str(LAST_REFRESH),
+
         "data": MASTER_CACHE
     }
 
@@ -686,18 +672,20 @@ def get_all_mos():
 @router.get("/traceability_report/{mo}")
 def get_flow(mo: str):
 
-    search_mo = clean_mo(mo)
+    clean = clean_mo(mo)
 
-    if search_mo in FLOW_CACHE:
+    if clean in FLOW_CACHE:
 
         return {
+
             "status": "success",
+
             "last_updated": str(LAST_REFRESH),
-            "data": FLOW_CACHE[search_mo]
+
+            "data": FLOW_CACHE[clean]
         }
 
     raise HTTPException(
         status_code=404,
-        detail=f"No flow found for MO {mo}"
+        detail="MO not found"
     )
-
