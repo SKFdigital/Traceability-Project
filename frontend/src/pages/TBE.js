@@ -1,281 +1,182 @@
 import React, { useState, useEffect } from 'react';
-import './Traceability.css'; // Reusing your existing CSS for a consistent look
-
-const API = 'https://scm-backend-pshv.onrender.com'; // Update this to your production backend URL later
 
 const TBE = () => {
-  const [summaryData, setSummaryData] = useState([]);
-  const [selectedMoFlow, setSelectedMoFlow] = useState(null);
-  
-  const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(false);
-  const [error, setError] = useState('');
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
+  // Fetch data from the FastAPI backend
   useEffect(() => {
-    fetchTbeDashboard();
+    const fetchData = async () => {
+      try {
+        // Adjust the URL/Port if your backend runs on a different port
+        const response = await fetch('http://localhost:8000/traceability_all_mos');
+        if (!response.ok) {
+          throw new Error(`Network Error: ${response.status}`);
+        }
+        const result = await response.json();
+        
+        // Handle backend initialization state
+        if (result.status === 'initializing') {
+          setError(result.message);
+        } else {
+          setData(result.data);
+          setError(null);
+        }
+      } catch (err) {
+        setError('Failed to connect to the TBE backend pipeline.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+    // Optional: Auto-refresh every 5 minutes to stay synced with backend cache
+    const interval = setInterval(fetchData, 300000); 
+    return () => clearInterval(interval);
   }, []);
 
-  const fetchTbeDashboard = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      // Calling the NEW tbe_all_mos endpoint
-      const res = await fetch(`${API}/tbe_all_mos`);
-      if (!res.ok) throw new Error('Network error pulling records from TBE pipeline.');
-      
-      const json = await res.json();
-      
-      if (json.status === 'initializing') {
-        setIsInitializing(true);
-        setTimeout(fetchTbeDashboard, 4000); // Retry if backend is warming up
-      } else if (json.status === 'success') {
-        setIsInitializing(false);
-        setSummaryData(json.data);
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleViewDetail = async (moString) => {
-    try {
-      setLoading(true);
-      setError('');
-      // Calling the NEW tbe_report endpoint
-      const res = await fetch(`${API}/tbe_report/${moString.trim()}`);
-      if (!res.ok) throw new Error('Could not pull tracking sequence for this TBE order.');
-      const json = await res.json();
-      
-      if (json.status === 'success') {
-        setSelectedMoFlow({
-          mo: json.data.mo,
-          flow_data: json.data.rows || []
-        });
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 1. Filter based on search (MO, Channel, or Base Product)
-  const filteredSummary = summaryData.filter(item => 
-    (item.mo && item.mo.toLowerCase().includes(search.toLowerCase())) ||
-    (item.channel && String(item.channel).toLowerCase().includes(search.toLowerCase())) ||
-    (item.base_product && String(item.base_product).toLowerCase().includes(search.toLowerCase()))
-  );
-
-  // 2. SORT data sequentially by MO -> Channel -> Component Type. 
-  // Crucial for React rowSpan merging logic to function.
-  const sortedSummary = [...filteredSummary].sort((a, b) => {
-    if (a.mo !== b.mo) return (a.mo || '').localeCompare(b.mo || '');
-    if (a.channel !== b.channel) return String(a.channel || '').localeCompare(String(b.channel || ''));
-    return String(a.component_type || '').localeCompare(String(b.component_type || ''));
+  // Filter logic for the search bar
+  const filteredData = data.filter((row) => {
+    const searchString = `${row.mo_number} ${row.product_variant} ${row.ring_type}`.toLowerCase();
+    return searchString.includes(searchTerm.toLowerCase());
   });
 
-  // 3. Row Span Logic for MO Column
-  const getMoRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo;
-    if (currentIndex > 0 && dataArray[currentIndex - 1].mo === currentMo) {
-      return 0; // Handled by row above
-    }
-    let span = 1;
-    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo === currentMo) {
-      span++;
-    }
-    return span;
-  };
-
-  // 4. Row Span Logic for Channel Column (Spans within the same MO)
-  const getChannelRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo;
-    const currentChannel = dataArray[currentIndex].channel;
-    
-    if (currentIndex > 0 && 
-        dataArray[currentIndex - 1].mo === currentMo && 
-        dataArray[currentIndex - 1].channel === currentChannel) {
-      return 0; // Handled by row above
-    }
-    
-    let span = 1;
-    while (
-      currentIndex + span < dataArray.length && 
-      dataArray[currentIndex + span].mo === currentMo &&
-      dataArray[currentIndex + span].channel === currentChannel
-    ) {
-      span++;
-    }
-    return span;
-  };
-
   return (
-    <div className="traceability-container">
-      <div className="header-section">
+    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div>
-          <h1>TBE Calibration Tracking</h1>
-          <p className="sub-tag">
-            {selectedMoFlow ? `Detailed Channel Flow / Order: ${selectedMoFlow.mo}` : "Transit Buffer / Entry Global KPI Dashboard"}
-          </p>
+          <h1 style={{ margin: 0, color: '#0f172a' }}>TBE Calibration Tracking</h1>
+          <p style={{ margin: 0, color: '#64748b' }}>Transit Buffer / Channel Synchronization Dashboard</p>
         </div>
-        
-        <div className="control-actions">
-          {selectedMoFlow ? (
-            <button className="back-btn" onClick={() => setSelectedMoFlow(null)}>
-              ← Back to TBE Dashboard
-            </button>
-          ) : (
-            <input
-              className="search-box"
-              placeholder="Filter by MO or Channel..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              disabled={isInitializing}
-            />
-          )}
-        </div>
+        <input
+          type="text"
+          placeholder="Filter by MO or Variant..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{ padding: '8px 12px', width: '300px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+        />
       </div>
 
-      {error && <div className="error-box">{error}</div>}
-      
-      {isInitializing && (
-        <div className="initializing-box">
-          <div className="spinner"></div>
-          <p><strong>TBE Backend is warming up...</strong></p>
-          <p className="sub-text">Downloading and parsing master excel configurations. Auto-refreshing...</p>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>Loading TBE Matrix...</div>
+      ) : error ? (
+        <div style={{ textAlign: 'center', padding: '40px', color: '#b91c1c', backgroundColor: '#fef2f2', borderRadius: '4px' }}>
+          {error}
         </div>
-      )}
-
-      {loading && !isInitializing && <div className="loading-spinner">Querying Database Pipeline Cache...</div>}
-
-      {/* VIEW BLOCK 1: MAIN TBE SUMMARY DASHBOARD */}
-      {!loading && !isInitializing && !selectedMoFlow && (
-        <div className="table-wrapper">
-          <table className="trace-table">
+      ) : (
+        <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '4px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'center' }}>
+            
+            {/* TOP HEADER ROW: GROUPED COLUMNS WITH COLORS MATCHING YOUR IMAGE 2 */}
             <thead>
-              <tr className="super-header">
-                <th colSpan="2" className="meta-head">Production Identity</th>
-                <th colSpan="2" className="sho-head">Product Detail</th>
-                <th colSpan="2" className="ch-head">TBE Metrics</th>
-                <th colSpan="3" className="tb-head">Timeline & Status</th>
+              <tr style={{ color: '#ffffff', fontWeight: 'bold' }}>
+                <th colSpan="4" style={{ backgroundColor: '#1e293b', padding: '12px', borderRight: '1px solid #cbd5e1' }}>
+                  Order Metadata
+                </th>
+                <th colSpan="2" style={{ backgroundColor: '#1d4ed8', padding: '12px', borderRight: '1px solid #cbd5e1' }}>
+                  SHO Department
+                </th>
+                <th colSpan="2" style={{ backgroundColor: '#9a3412', padding: '12px', borderRight: '1px solid #cbd5e1' }}>
+                  Transit Buffer
+                </th>
+                <th colSpan="3" style={{ backgroundColor: '#047857', padding: '12px', borderRight: '1px solid #cbd5e1' }}>
+                  Channel Section (Combined)
+                </th>
+                <th colSpan="1" style={{ backgroundColor: '#0f172a', padding: '12px' }}>
+                  System Status
+                </th>
               </tr>
-              <tr className="sub-header">
-                <th>MO Number</th>
-                <th>Channel ID</th>
-                <th>Product Family</th>
-                <th>Component</th>
-                <th>Total Rings</th>
-                <th>Total Net Weight (kg)</th>
-                <th>First Scan In</th>
-                <th>Last Scan Out</th>
-                <th>Calibration Status</th>
+              
+              {/* SUB HEADER ROW */}
+              <tr style={{ backgroundColor: '#f8fafc', color: '#334155', borderBottom: '2px solid #cbd5e1' }}>
+                {/* Order Metadata */}
+                <th style={styles.th}>MO Number</th>
+                <th style={styles.th}>Product Variant</th>
+                <th style={styles.th}>Target Qty</th>
+                <th style={{...styles.th, borderRight: '2px solid #cbd5e1'}}>Ring Type</th>
+                
+                {/* SHO Department */}
+                <th style={styles.th}>Qty</th>
+                <th style={{...styles.th, borderRight: '2px solid #cbd5e1'}}>In Date</th>
+                
+                {/* Transit Buffer */}
+                <th style={styles.th}>Qty</th>
+                <th style={{...styles.th, borderRight: '2px solid #cbd5e1'}}>Out Date</th>
+                
+                {/* Channel Section */}
+                <th style={styles.th}>Qty</th>
+                <th style={styles.th}>In Date</th>
+                <th style={{...styles.th, borderRight: '2px solid #cbd5e1'}}>Out Date</th>
+                
+                {/* System Status */}
+                <th style={styles.th}>Tracking Status</th>
               </tr>
             </thead>
-            <tbody>
-              {sortedSummary.map((row, idx) => {
-                const moSpan = getMoRowSpan(sortedSummary, idx);
-                const channelSpan = getChannelRowSpan(sortedSummary, idx);
-                
-                return (
-                  <tr key={idx} className="data-row">
-                    {/* Spanned MO Cell */}
-                    {moSpan > 0 && (
-                      <td rowSpan={moSpan} className="merged-mo-cell">
-                        <button className="mo-link-btn" onClick={() => handleViewDetail(row.mo)}>
-                          {row.mo}
-                        </button>
-                      </td>
-                    )}
-                    
-                    {/* Spanned Channel Cell */}
-                    {channelSpan > 0 && (
-                      <td rowSpan={channelSpan} className="merged-channel-cell fw-bold" style={{ textAlign: "center" }}>
-                        CH-{(row.channel || 'N/A').toString()}
-                      </td>
-                    )}
 
-                    <td className="fw-bold">{row.base_product || '-'}</td>
-                    <td>{row.component_type || '-'}</td>
-                    
-                    <td className="qty-cell">{row.total_rings > 0 ? Number(row.total_rings).toLocaleString() : '-'}</td>
-                    <td className="qty-cell">{row.total_net_weight > 0 ? Number(row.total_net_weight).toLocaleString() : '-'}</td>
-                    
-                    <td>{row.in_date || '-'}</td>
-                    <td>{row.out_date || '-'}</td>
-                    
-                    <td>
-                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-queue'}`}>
-                        {row.status || 'In Queue'}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-              {sortedSummary.length === 0 && (
+            {/* TABLE BODY */}
+            <tbody>
+              {filteredData.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="empty-state">
+                  <td colSpan="12" style={{ padding: '30px', color: '#64748b', fontStyle: 'italic' }}>
                     No matching TBE Tracking data located.
                   </td>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* VIEW BLOCK 2: TARGET DRILLDOWN DETAILED FLOW */}
-      {!loading && selectedMoFlow && selectedMoFlow.flow_data && (
-        <div className="table-wrapper">
-          <table className="trace-table">
-            <thead>
-              <tr className="sub-header">
-                <th>MO Reference</th>
-                <th>Specific Location</th>
-                <th>Product Scan</th>
-                <th>Date</th>
-                <th>Shift</th>
-                <th>Gross Weight (kg)</th>
-                <th>Net Weight (kg)</th>
-                <th>Ring Weight (kg)</th>
-                <th>Rings Logged</th>
-                <th>Audit Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedMoFlow.flow_data.map((row, index) => {
-                const isFirstRow = index === 0;
-                return (
-                  <tr key={index} className="data-row">
-                    {isFirstRow && (
-                      <td rowSpan={selectedMoFlow.flow_data.length} className="merged-mo-cell">
-                        <strong>{selectedMoFlow.mo}</strong>
-                      </td>
-                    )}
-                    <td>{row.department || '-'}</td>
-                    <td>{row.product || '-'}</td>
-                    <td>{row.date || '-'}</td>
-                    <td>{row.shift || '-'}</td>
-                    <td>{row.gross_weight ? Number(row.gross_weight).toLocaleString() : 0}</td>
-                    <td>{row.net_weight ? Number(row.net_weight).toLocaleString() : 0}</td>
-                    <td>{row.ring_weight ? Number(row.ring_weight).toLocaleString() : 0}</td>
-                    <td>{row.rings ? Number(row.rings).toLocaleString() : 0}</td>
-                    <td>
-                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'pending'}`}>
-                        {row.status || '-'}
-                      </span>
+              ) : (
+                filteredData.map((row, index) => (
+                  <tr key={index} style={{ borderBottom: '1px solid #e2e8f0', backgroundColor: index % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
+                    
+                    {/* Order Metadata */}
+                    <td style={styles.td}>{row.mo_number}</td>
+                    <td style={{...styles.td, fontWeight: 'bold'}}>{row.product_variant}</td>
+                    <td style={styles.td}>{row.target_qty}</td>
+                    <td style={{...styles.td, fontWeight: 'bold', borderRight: '2px solid #e2e8f0'}}>{row.ring_type}</td>
+                    
+                    {/* SHO Department */}
+                    <td style={styles.td}>{row.sho_qty.toLocaleString()}</td>
+                    <td style={{...styles.td, borderRight: '2px solid #e2e8f0'}}>{row.sho_in_date}</td>
+                    
+                    {/* Transit Buffer */}
+                    <td style={styles.td}>{row.tb_qty.toLocaleString()}</td>
+                    <td style={{...styles.td, borderRight: '2px solid #e2e8f0'}}>{row.tb_out_date}</td>
+                    
+                    {/* Channel Section */}
+                    <td style={styles.td}>{row.ch_qty.toLocaleString()}</td>
+                    <td style={styles.td}>{row.ch_in_date}</td>
+                    <td style={{...styles.td, borderRight: '2px solid #e2e8f0'}}>{row.ch_out_date}</td>
+                    
+                    {/* System Status */}
+                    <td style={{
+                      ...styles.td, 
+                      fontWeight: 'bold',
+                      color: row.tracking_status === 'Completed' ? '#166534' : 
+                             row.tracking_status === 'In Process' ? '#b45309' : '#475569'
+                    }}>
+                      {row.tracking_status}
                     </td>
                   </tr>
-                );
-              })}
+                ))
+              )}
             </tbody>
           </table>
         </div>
       )}
     </div>
   );
+};
+
+// Reusable styles for table cells to keep the JSX clean
+const styles = {
+  th: {
+    padding: '12px 8px',
+    borderBottom: '1px solid #cbd5e1',
+    fontWeight: '600'
+  },
+  td: {
+    padding: '12px 8px',
+    color: '#334155'
+  }
 };
 
 export default TBE;
