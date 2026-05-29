@@ -50,6 +50,7 @@ const TBE = () => {
       if (!res.ok) throw new Error('Could not pull tracking sequence for this production order.');
       const json = await res.json();
       
+      
       if (json.status === 'success') {
         setSelectedMoFlow({
           mo: json.data.mo,
