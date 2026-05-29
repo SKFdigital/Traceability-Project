@@ -25,6 +25,9 @@ const TBE = () => {
       
       const json = await res.json();
       
+      // ADD THIS LINE:
+      console.log("BACKEND DATA PAYLOAD:", json); 
+            
       if (json.status === 'initializing') {
         setIsInitializing(true);
         setTimeout(fetchSummaryDashboard, 4000);
