@@ -1,4 +1,8 @@
-/* Container & Headers */
+/* ==========================================================================
+   TBE Calibration Tracking Dashboard Stylesheet (TBE.css)
+   ========================================================================== */
+
+/* Container & Layout Base */
 .traceability-container {
   padding: 24px;
   background-color: #f8fafc;
@@ -26,7 +30,13 @@
   margin: 0;
 }
 
-/* Controls */
+/* Control Elements */
+.control-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
 .search-box {
   padding: 10px 16px;
   border: 1px solid #cbd5e1;
@@ -34,7 +44,7 @@
   width: 260px;
   font-size: 14px;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .search-box:focus {
@@ -57,7 +67,7 @@
   background-color: #e2e8f0;
 }
 
-/* Table Styling */
+/* Table Architecture Grid */
 .table-wrapper {
   background: #ffffff;
   border-radius: 8px;
@@ -67,13 +77,12 @@
 
 .trace-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: collapse; 
   text-align: center;
   font-size: 13px;
   color: #334155;
 }
 
-/* Ensures every cell has exactly a 1px border */
 .trace-table th, 
 .trace-table td {
   border: 1px solid #e2e8f0;
@@ -81,39 +90,36 @@
   vertical-align: middle;
 }
 
-/* Super Headers */
+/* Super Headers Component Department Grouping */
 .super-header th {
   color: #ffffff;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  font-size: 12px;
-  border: 1px solid #ffffff20; 
+  font-size: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
-/* Updated Colors to differentiate TBE from Traceability if desired, 
-   but kept structurally identical so it feels like the same app */
 .meta-head { background-color: #1e293b; } /* Slate 800 */
 .sho-head  { background-color: #1e3a8a; } /* Blue 900 */
-.ch-head   { background-color: #065f46; } /* Emerald 800 */
 .tb-head   { background-color: #7c2d12; } /* Orange 900 */
+.ch-head   { background-color: #065f46; } /* Emerald 800 */
 
-/* Sub Headers */
+/* Metrics Sub Headers */
 .sub-header th {
   background-color: #f8fafc;
   color: #475569;
   font-weight: 600;
 }
 
-/* Data Rows */
+/* Data Row Mutations & Merges */
 .data-row:hover td {
   background-color: #f8fafc;
 }
 
-/* Merged Cells */
 .merged-mo-cell, 
 .merged-channel-cell {
-  background-color: #ffffff !important;
+  background-color: #ffffff !important; /* Overrides hover so parent spanned block does not flash */
 }
 
 .mo-link-btn {
@@ -123,13 +129,15 @@
   font-weight: 700;
   cursor: pointer;
   text-decoration: underline;
+  padding: 0;
+  font-size: 13px;
 }
 
 .mo-link-btn:hover {
   color: #1d4ed8;
 }
 
-/* Typography Helpers */
+/* Typography Utility Modifiers */
 .fw-bold {
   font-weight: 700;
   color: #0f172a;
@@ -140,7 +148,7 @@
   color: #334155;
 }
 
-/* Status Badges */
+/* State Status Badge System */
 .status-badge {
   display: inline-block;
   padding: 4px 12px;
@@ -148,17 +156,12 @@
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 
-/* TBE Specific Statuses */
 .status-badge.completed {
   background-color: #dcfce7;
   color: #166534;
-}
-
-.status-badge.in-queue {
-  background-color: #e0e7ff;
-  color: #3730a3;
 }
 
 .status-badge.in-process,
@@ -168,7 +171,12 @@
   color: #854d0e;
 }
 
-/* States */
+.status-badge.yet-to-start {
+  background-color: #e2e8f0;
+  color: #475569;
+}
+
+/* Pipeline States, Loaders & Errors */
 .empty-state {
   text-align: center;
   padding: 40px !important;
@@ -190,6 +198,7 @@
   border-radius: 6px;
   margin-bottom: 24px;
   border: 1px solid #f87171;
+  font-weight: 500;
 }
 
 .initializing-box {
@@ -201,5 +210,30 @@
   margin-bottom: 24px;
 }
 
-.initializing-box strong { color: #1e3a8a; }
-.initializing-box .sub-text { color: #3b82f6; font-size: 14px; margin-top: 8px; }
+.initializing-box strong { 
+  color: #1e3a8a; 
+  display: block;
+  margin-bottom: 4px;
+}
+
+.initializing-box .sub-text { 
+  color: #3b82f6; 
+  font-size: 14px; 
+  margin: 8px 0 0 0; 
+}
+
+/* CSS Live Wireframe Spinner Keyframe */
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #bfdbfe;
+  border-top: 3px solid #2563eb;
+  border-radius: 50%;
+  margin: 0 auto 12px auto;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
