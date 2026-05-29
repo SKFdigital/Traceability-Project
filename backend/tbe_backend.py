@@ -90,7 +90,7 @@ def process_tbe_dashboard_data():
 
     try:
         mo_sheets = load_excel_sheets(settings.MO_DATA_URL)
-        transit_buffer_sheets = load_excel_sheets(settings.RING_WT_TRANSIT_BUFFER_URL)
+        transit_buffer_sheets = load_excel_sheets(settings.RINGWT_TRANSITBUFFER_URL)
         trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
         dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
