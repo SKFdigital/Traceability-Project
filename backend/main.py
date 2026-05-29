@@ -77,6 +77,21 @@ def list_users(db: Session = Depends(get_db)):
     # Explicit conversion drops password hashes from structural network payloads
     return [{"id": u.id, "email": u.email, "role": u.role} for u in users]
 
+@app.delete("/delete_user/{user_id}")
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    # 1. Look for the user
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    # 2. If user doesn't exist, return an error
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # 3. Delete the user
+    db.delete(user)
+    db.commit()
+    
+    return {"message": f"User with ID {user_id} deleted successfully"}
+
 # ================= INCLUDE ROUTERS =================
 app.include_router(order_router)
 app.include_router(traceability_router)
