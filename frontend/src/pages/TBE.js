@@ -60,28 +60,28 @@ const TBE = () => {
     }
   };
 
-  // 1. Filter the data based on search (Corrected back to mo_number & product_variant)
+  // 1. Filter using the EXACT keys from the backend: 'mo' and 'final_variant'
   const filteredSummary = summaryData.filter(item => 
-    (item.mo_number && String(item.mo_number).toLowerCase().includes(search.toLowerCase())) ||
-    (item.product_variant && String(item.product_variant).toLowerCase().includes(search.toLowerCase()))
+    (item.mo && String(item.mo).toLowerCase().includes(search.toLowerCase())) ||
+    (item.final_variant && String(item.final_variant).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // 2. SORT the data by MO, AND THEN by Product Variant.
+  // 2. Sort by 'mo' and 'final_variant'
   const sortedSummary = [...filteredSummary].sort((a, b) => {
-    if (a.mo_number !== b.mo_number) {
-      return (a.mo_number || '').localeCompare(b.mo_number || '');
+    if (a.mo !== b.mo) {
+      return (a.mo || '').localeCompare(b.mo || '');
     }
-    return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
+    return String(a.final_variant || '').localeCompare(String(b.final_variant || ''));
   });
 
   // 3. Row Span Logic for MO Column
   const getMoRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo_number;
-    if (currentIndex > 0 && dataArray[currentIndex - 1].mo_number === currentMo) {
+    const currentMo = dataArray[currentIndex].mo;
+    if (currentIndex > 0 && dataArray[currentIndex - 1].mo === currentMo) {
       return 0; 
     }
     let span = 1;
-    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo_number === currentMo) {
+    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo === currentMo) {
       span++;
     }
     return span;
@@ -89,20 +89,20 @@ const TBE = () => {
 
   // 4. Row Span Logic for Channel Column
   const getChannelRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo_number;
-    const currentFamily = dataArray[currentIndex].product_variant;
+    const currentMo = dataArray[currentIndex].mo;
+    const currentFamily = dataArray[currentIndex].final_variant;
     
     if (currentIndex > 0 && 
-        dataArray[currentIndex - 1].mo_number === currentMo && 
-        dataArray[currentIndex - 1].product_variant === currentFamily) {
+        dataArray[currentIndex - 1].mo === currentMo && 
+        dataArray[currentIndex - 1].final_variant === currentFamily) {
       return 0; 
     }
     
     let span = 1;
     while (
       currentIndex + span < dataArray.length && 
-      dataArray[currentIndex + span].mo_number === currentMo &&
-      dataArray[currentIndex + span].product_variant === currentFamily
+      dataArray[currentIndex + span].mo === currentMo &&
+      dataArray[currentIndex + span].final_variant === currentFamily
     ) {
       span++;
     }
@@ -185,39 +185,39 @@ const TBE = () => {
                     {/* Spanned MO Cell */}
                     {moSpan > 0 && (
                       <td rowSpan={moSpan} className="merged-mo-cell">
-                        <button className="mo-link-btn" onClick={() => handleViewDetail(row.mo_number)}>
-                          {row.mo_number}
+                        <button className="mo-link-btn" onClick={() => handleViewDetail(row.mo)}>
+                          {row.mo}
                         </button>
                       </td>
                     )}
 
-                    {/* Meta Section */}
-                    <td className="fw-bold">{row.product_variant || '-'}</td>
-                    <td className="qty-cell">{row.target_qty && row.target_qty !== "-" ? Number(row.target_qty).toLocaleString() : '-'}</td>
-                    <td className="fw-bold">{row.ring_type || '-'}</td>
+                    {/* Meta Section - Using matched keys */}
+                    <td className="fw-bold">{row.final_variant || '-'}</td>
+                    <td className="qty-cell">{row.qty_req && row.qty_req !== "-" ? Number(row.qty_req).toLocaleString() : '-'}</td>
+                    <td className="fw-bold">{row.component_type || '-'}</td>
                     
-                    {/* SHO & TB */}
+                    {/* SHO & TB - Using matched keys */}
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '-'}</td>
-                    <td>{row.sho_in_date || '-'}</td>
+                    <td>{row.sho_in || '-'}</td>
                     
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '-'}</td>
-                    <td>{row.tb_out_date || '-'}</td>
+                    <td>{row.tb_out || '-'}</td>
                     
-                    {/* Merged Channel Section */}
+                    {/* Merged Channel Section - Using matched keys */}
                     {channelSpan > 0 && (
                       <>
                         <td rowSpan={channelSpan} className="merged-channel-cell fw-bold">
                           {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}
                         </td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_in_date || '-'}</td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_out_date || '-'}</td>
+                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
+                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
                       </>
                     )}
                     
-                    {/* Status */}
+                    {/* Status - Using matched keys */}
                     <td>
-                      <span className={`status-badge ${row.tracking_status ? row.tracking_status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
-                        {row.tracking_status || 'In Process'}
+                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
+                        {row.status || 'In Process'}
                       </span>
                     </td>
                   </tr>
@@ -260,14 +260,15 @@ const TBE = () => {
                         <strong>{selectedMoFlow.mo}</strong>
                       </td>
                     )}
-                    <td>{row.product_variant || '-'}</td>
-                    <td><strong>{row.ring_type || '-'}</strong></td>
+                    {/* Detailed view also needs the updated keys */}
+                    <td>{row.final_variant || '-'}</td>
+                    <td><strong>{row.component_type || '-'}</strong></td>
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : 0}</td>
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : 0}</td>
                     <td>{row.ch_qty ? Number(row.ch_qty).toLocaleString() : 0}</td>
                     <td>
-                      <span className={`status-badge ${row.tracking_status ? row.tracking_status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
-                        {row.tracking_status || '-'}
+                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
+                        {row.status || '-'}
                       </span>
                     </td>
                   </tr>
