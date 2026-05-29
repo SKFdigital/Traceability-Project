@@ -61,50 +61,50 @@ const TBE = () => {
     }
   };
 
-  // 1. Filter the data based on search
+  // 1. Filter the data based on search (Updated to normalized_mo and tag_type)
   const filteredSummary = summaryData.filter(item => 
-    (item.mo_number && item.mo_number.toLowerCase().includes(search.toLowerCase())) ||
-    (item.product_variant && String(item.product_variant).toLowerCase().includes(search.toLowerCase()))
+    (item.normalized_mo && String(item.normalized_mo).toLowerCase().includes(search.toLowerCase())) ||
+    (item.tag_type && String(item.tag_type).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // 2. SORT the data by MO, AND THEN by Product Variant. 
+  // 2. SORT the data by MO, AND THEN by Product Variant. (Updated to normalized_mo and tag_type)
   const sortedSummary = [...filteredSummary].sort((a, b) => {
-    if (a.mo_number !== b.mo_number) {
-      return (a.mo_number || '').localeCompare(b.mo_number || '');
+    if (a.normalized_mo !== b.normalized_mo) {
+      return (a.normalized_mo || '').localeCompare(b.normalized_mo || '');
     }
-    return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
+    return String(a.tag_type || '').localeCompare(String(b.tag_type || ''));
   });
 
-  // 3. Row Span Logic for MO Column
+  // 3. Row Span Logic for MO Column (Updated to normalized_mo)
   const getMoRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo_number;
-    if (currentIndex > 0 && dataArray[currentIndex - 1].mo_number === currentMo) {
+    const currentMo = dataArray[currentIndex].normalized_mo;
+    if (currentIndex > 0 && dataArray[currentIndex - 1].normalized_mo === currentMo) {
       return 0; // Already spanned from a row above
     }
     let span = 1;
-    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo_number === currentMo) {
+    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].normalized_mo === currentMo) {
       span++;
     }
     return span;
   };
 
-  // 4. Row Span Logic for Channel Column (Only groups identical families inside the same MO)
+  // 4. Row Span Logic for Channel Column (Updated to normalized_mo and tag_type)
   const getChannelRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo_number;
-    const currentFamily = dataArray[currentIndex].product_variant;
+    const currentMo = dataArray[currentIndex].normalized_mo;
+    const currentFamily = dataArray[currentIndex].tag_type;
     
     // Check if previous row was exactly the same MO + Variant
     if (currentIndex > 0 && 
-        dataArray[currentIndex - 1].mo_number === currentMo && 
-        dataArray[currentIndex - 1].product_variant === currentFamily) {
+        dataArray[currentIndex - 1].normalized_mo === currentMo && 
+        dataArray[currentIndex - 1].tag_type === currentFamily) {
       return 0; // Already spanned from a row above
     }
     
     let span = 1;
     while (
       currentIndex + span < dataArray.length && 
-      dataArray[currentIndex + span].mo_number === currentMo &&
-      dataArray[currentIndex + span].product_variant === currentFamily
+      dataArray[currentIndex + span].normalized_mo === currentMo &&
+      dataArray[currentIndex + span].tag_type === currentFamily
     ) {
       span++;
     }
@@ -191,19 +191,19 @@ const TBE = () => {
                 
                 return (
                   <tr key={idx} className="data-row">
-                    {/* Spanned MO Cell */}
+                    {/* Spanned MO Cell (Updated) */}
                     {moSpan > 0 && (
                       <td rowSpan={moSpan} className="merged-mo-cell">
-                        <button className="mo-link-btn" onClick={() => handleViewDetail(row.mo_number)}>
-                          {row.mo_number}
+                        <button className="mo-link-btn" onClick={() => handleViewDetail(row.normalized_mo)}>
+                          {row.normalized_mo}
                         </button>
                       </td>
                     )}
 
-                    {/* IM/OM Separation */}
-                    <td className="fw-bold">{row.product_variant}</td>
-                    <td className="qty-cell">{row.target_qty !== "-" ? Number(row.target_qty).toLocaleString() : '-'}</td>
-                    <td className="fw-bold">{row.ring_type}</td>
+                    {/* IM/OM Separation (Updated) */}
+                    <td className="fw-bold">{row.tag_type || '-'}</td>
+                    <td className="qty-cell">{row.pc_qty && row.pc_qty !== "-" ? Number(row.pc_qty).toLocaleString() : '-'}</td>
+                    <td className="fw-bold">{row.ring_type || '-'}</td>
                     
                     {/* SHO & TB */}
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '-'}</td>
@@ -269,7 +269,8 @@ const TBE = () => {
                         <strong>{selectedMoFlow.mo}</strong>
                       </td>
                     )}
-                    <td>{row.product_variant || '-'}</td>
+                    {/* Updated to tag_type */}
+                    <td>{row.tag_type || '-'}</td>
                     <td><strong>{row.ring_type || '-'}</strong></td>
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : 0}</td>
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : 0}</td>
