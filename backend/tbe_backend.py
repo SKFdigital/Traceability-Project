@@ -46,7 +46,6 @@ def repair_sheet_headers(df):
         
         if match_count >= 2:
             new_cols = df.iloc[idx].tolist()
-            # String clean step
             new_cols = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(new_cols)]
             repaired_df = df.iloc[idx+1:].copy()
             repaired_df.columns = new_cols
@@ -109,9 +108,15 @@ def clean_nan(value):
 
 def parse_date_safe(value):
     try:
-        if pd.isna(value) or str(value).strip().lower() in ["nan", "nat", "", "-"]:
+        if pd.isna(value) or str(value).strip().lower() in ["nan", "nat", "", "-", "none"]:
             return None
-        return pd.to_datetime(value, dayfirst=True, errors='coerce').date()
+        
+        # Explicit check to stop NaT from leaking out as an object
+        ts = pd.to_datetime(value, dayfirst=True, errors='coerce')
+        if ts is pd.NaT or pd.isna(ts):
+            return None
+            
+        return ts.date()
     except:
         return None
 
@@ -121,8 +126,6 @@ def load_excel_sheets(url):
         if resp.status_code != 200: 
             return {}
         xls = pd.ExcelFile(io.BytesIO(resp.content))
-        
-        # Load sheets and automatically correct layout shifts / titles on the fly
         return {sheet: repair_sheet_headers(xls.parse(sheet)) for sheet in xls.sheet_names}
     except Exception as e:
         print(f"⚠️ Sheet stream down on URL {url}: {str(e)}")
