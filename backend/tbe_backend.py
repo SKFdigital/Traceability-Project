@@ -25,7 +25,7 @@ def repair_sheet_headers(df):
     if df.empty:
         return df
     
-    targets = {"mo", "type", "qty", "quantity", "rings", "date", "channel", "production", "weight", "item"}
+    targets = {"mo", "ch", "type", "qty", "quantity", "rings", "date", "channel", "production", "weight", "item", "line"}
     
     current_cols = [str(c).strip().lower().replace(" ", "") for c in df.columns]
     if sum(1 for t in targets if any(t in c for c in current_cols)) >= 2:
@@ -49,7 +49,7 @@ def normalize_channel(value):
     if pd.isna(value): 
         return ""
     val_str = str(value).strip().upper()
-    for prefix in ["CH-", "CH.", "CH", "CHANNEL-", "CHANNEL", "T-", "T"]:
+    for prefix in ["CH-", "CH.", "CH", "CHANNEL-", "CHANNEL", "T-", "T", "SHEET", "SHEET-"]:
         if val_str.startswith(prefix):
             val_str = val_str[len(prefix):].strip()
     val_str = val_str.replace("-", "").replace(" ", "").strip()
@@ -129,7 +129,7 @@ def process_tbe_data():
         return
     
     IS_UPDATING = True
-    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Executing Bulletproof Batching TBE Pipeline...")
+    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Running Flat Row TBE Pipeline...")
 
     try:
         from settings import settings
@@ -145,8 +145,8 @@ def process_tbe_data():
             if df.empty or sheet_name in ['Pivot Table 1', 'Pivot Table 2', 'PIC List', 'List']: 
                 continue
             
-            c_col = find_column(df, ["channel", "channelno", "channelnum", "machineno", "line"])
-            type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "itemdescription", "desc"])
+            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "line", "mo"])
+            type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "itemdescription", "desc", "family"])
             d_col = find_column(df, ["date", "day", "txndate", "timestamp"])
             
             prod_col = find_column(df, ["production", "prodqty", "shiftproduction"])
@@ -158,7 +158,7 @@ def process_tbe_data():
 
             for _, row in df.iterrows():
                 ch = normalize_channel(row.get(c_col)) if c_col else normalize_channel(sheet_name)
-                if not ch: 
+                if not ch or ch == "0": 
                     continue
                 
                 prod_str = str(row.get(type_col)).strip().upper()
@@ -177,16 +177,16 @@ def process_tbe_data():
         df_ch_prod = pd.DataFrame(channel_production_records)
 
         # ---------------------------------------------------------
-        # STEP 2: PARSE TRANSIT BUFFER RING SPREADSHEETS
+        # STEP 2: PARSE TRANSIT BUFFER RECORDS (KEEP ALL ROWS FLAT)
         # ---------------------------------------------------------
         raw_ring_data = []
         for sheet_name, df in ring_wt_sheets.items():
-            if df.empty or sheet_name in ['Sheet2', 'Sheet3']: 
+            if df.empty: 
                 continue
             
-            c_col = find_column(df, ["channel", "channelno", "channelnum", "machineno"])
-            f_col = find_column(df, ["type", "variant", "product", "item", "itemdescription", "desc", "family"])
-            q_col = find_column(df, ["noofrings", "quantity", "qty", "rings", "totalqtyrecd", "recdqty", "production"])
+            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "mo", "line"])
+            f_col = find_column(df, ["type", "variant", "product", "item", "itemdescription", "desc", "family", "part"])
+            q_col = find_column(df, ["noofrings", "quantity", "qty", "rings", "totalqtyrecd", "recdqty", "production", "total"])
             d_col = find_column(df, ["date", "day", "txndate", "timestamp"])
 
             if not f_col or not q_col: 
@@ -194,7 +194,7 @@ def process_tbe_data():
 
             for _, row in df.iterrows():
                 ch = normalize_channel(row.get(c_col)) if c_col else normalize_channel(sheet_name)
-                if not ch: 
+                if not ch or ch == "0": 
                     continue
                 
                 prod_text = str(row.get(f_col)).strip().upper()
@@ -210,71 +210,32 @@ def process_tbe_data():
 
         df_rings = pd.DataFrame(raw_ring_data)
         if df_rings.empty:
-            print("⚠️ Pipeline Warning: No actionable components extracted from Transit Buffer.")
+            print("⚠️ Pipeline Warning: No records found in Transit Buffer.")
             MASTER_CACHE = []
             LAST_REFRESH = datetime.now()
             return
 
         # ---------------------------------------------------------
-        # STEP 3: SESSIONIZE BY 7-DAY INACTIVITY GAPS
-        # ---------------------------------------------------------
-        intermediate_batches = []
-        
-        for (ch, fam, r_type), group in df_rings.groupby(['ch', 'fam', 'type']):
-            group = group.sort_values(by='date')
-            
-            current_batch_rows = []
-            for _, row in group.iterrows():
-                if not current_batch_rows:
-                    current_batch_rows.append(row)
-                else:
-                    last_date = current_batch_rows[-1]['date']
-                    if (row['date'] - last_date).days <= 7:
-                        current_batch_rows.append(row)
-                    else:
-                        intermediate_batches.append({
-                            "ch": ch, "fam": fam, "type": r_type,
-                            "tb_qty": sum(r['qty'] for r in current_batch_rows),
-                            "start_date": current_batch_rows[0]['date'],
-                            "end_date": current_batch_rows[-1]['date']
-                        })
-                        current_batch_rows = [row]
-                        
-            if current_batch_rows:
-                intermediate_batches.append({
-                    "ch": ch, "fam": fam, "type": r_type,
-                    "tb_qty": sum(r['qty'] for r in current_batch_rows),
-                    "start_date": current_batch_rows[0]['date'],
-                    "end_date": current_batch_rows[-1]['date']
-                })
-
-        # ---------------------------------------------------------
-        # STEP 4: SAFELY COMPILE MATRIX ROWS (No Silent Skipping)
+        # STEP 3: MAP PRODUCTION DIRECTLY TO EACH TRANSIT BUFFER ROW
         # ---------------------------------------------------------
         compiled_summary = []
         
-        for batch in intermediate_batches:
-            ch = batch["ch"]
-            fam = batch["fam"]
-            r_type = batch["type"]
-            tb_qty = batch["tb_qty"]
-            start_dt = batch["start_date"]
-            end_dt = batch["end_date"]
+        for _, row in df_rings.iterrows():
+            ch = row["ch"]
+            fam = row["fam"]
+            r_type = row["type"]
+            tb_qty = row["qty"]
+            dt = row["date"]
             
             ch_qty = 0.0
             ch_min_date = None
             ch_max_date = None
             
-            # Use an ultra-loose time cushion (±14 days) to guarantee we pick up matching production entries
+            # Look for production matches on the same channel, variant, and exact date
             if not df_ch_prod.empty:
-                mask = (df_ch_prod["ch"] == ch) & (df_ch_prod["fam"] == fam)
+                mask = (df_ch_prod["ch"] == ch) & (df_ch_prod["fam"] == fam) & (df_ch_prod["date"] == dt)
                 matched_prod = df_ch_prod[mask]
                 
-                if not matched_prod.empty and start_dt and end_dt:
-                    date_mask = (matched_prod["date"] >= (start_dt - pd.Timedelta(days=14))) & \
-                                (matched_prod["date"] <= (end_dt + pd.Timedelta(days=14)))
-                    matched_prod = matched_prod[date_mask]
-                    
                 if not matched_prod.empty:
                     ch_qty = matched_prod["qty"].sum()
                     ch_min_date = matched_prod["date"].min()
@@ -292,19 +253,20 @@ def process_tbe_data():
                 "product_variant": fam,
                 "ring_type": r_type,
                 "sho_qty": tb_qty, 
-                "sho_in": str(start_dt) if start_dt else "-",
+                "sho_in": str(dt) if dt else "-",
                 "tb_qty": tb_qty,
-                "tb_out": str(end_dt) if end_dt else "-",
+                "tb_out": str(dt) if dt else "-",
                 "ch_qty": ch_qty,
                 "ch_in": str(ch_min_date) if ch_min_date else "-",
                 "ch_out": str(ch_max_date) if ch_max_date else "-",
                 "status": calc_status
             })
 
+        # Keep everything neatly sorted by channel, item variant, and chronological date
         compiled_summary.sort(key=lambda x: (x["channel_ref"], x["product_variant"], x["ring_type"], x["sho_in"]))
         MASTER_CACHE = compiled_summary
         LAST_REFRESH = datetime.now()
-        print(f"✅ [Engine Complete] Successfully processed {len(MASTER_CACHE)} chronological batch entries.")
+        print(f"✅ [Engine Complete] Successfully processed {len(MASTER_CACHE)} un-grouped flat rows.")
 
     except Exception as e:
         print(f"❌ CRITICAL RUNTIME EXCEPTION IN LIVE AGGREGATION: {str(e)}")
