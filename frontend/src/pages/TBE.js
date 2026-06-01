@@ -15,7 +15,6 @@ const TBE = () => {
   useEffect(() => {
     fetchTBEDashboard();
     
-    // Cleanup any lingering timers on unmount to prevent memory leaks
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
@@ -23,7 +22,6 @@ const TBE = () => {
 
   const fetchTBEDashboard = async () => {
     try {
-      // Only show top-level loading indicator if not already in initialization polling mode
       if (!isInitializing) setLoading(true);
       setError('');
 
@@ -35,7 +33,6 @@ const TBE = () => {
       if (json.status === 'initializing') {
         setIsInitializing(true);
         setSummaryData([]);
-        // Safely queue the next poll
         timerRef.current = setTimeout(fetchTBEDashboard, 4000);
       } else if (json.status === 'success') {
         setIsInitializing(false);
@@ -52,16 +49,16 @@ const TBE = () => {
     }
   };
 
-  // 1. Dynamic Filtering
+  // 1. Dynamic Filtering (Filters by Channel Reference or Product Family)
   const filteredSummary = summaryData.filter(item => 
-    (item.mo_number && item.mo_number.toLowerCase().includes(search.toLowerCase())) ||
+    (item.channel_ref && String(item.channel_ref).toLowerCase().includes(search.toLowerCase())) ||
     (item.product_variant && String(item.product_variant).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // 2. Multi-tier Row Stability Sorting (Aligned perfectly with Backend Pipeline Specs)
+  // 2. Multi-tier Sorting (Ensures layout stability for merging rows)
   const sortedSummary = [...filteredSummary].sort((a, b) => {
-    if (a.mo_number !== b.mo_number) {
-      return (a.mo_number || '').localeCompare(b.mo_number || '');
+    if (a.channel_ref !== b.channel_ref) {
+      return String(a.channel_ref || '').localeCompare(String(b.channel_ref || ''));
     }
     if (a.product_variant !== b.product_variant) {
       return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
@@ -69,27 +66,27 @@ const TBE = () => {
     return String(a.ring_type || '').localeCompare(String(b.ring_type || ''));
   });
 
-  // 3. Row Span Generation: MO Columns
-  const getMoRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo_number;
-    if (!currentMo) return 1; 
-    if (currentIndex > 0 && dataArray[currentIndex - 1].mo_number === currentMo) {
+  // 3. Row Span Generation: Channel Column
+  const getChannelRowSpan = (dataArray, currentIndex) => {
+    const currentRef = dataArray[currentIndex].channel_ref;
+    if (!currentRef) return 1; 
+    if (currentIndex > 0 && dataArray[currentIndex - 1].channel_ref === currentRef) {
       return 0; 
     }
     let span = 1;
-    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo_number === currentMo) {
+    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].channel_ref === currentRef) {
       span++;
     }
     return span;
   };
 
-  // 4. Row Span Generation: Channel Blocks
-  const getChannelRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo_number;
+  // 4. Row Span Generation: Channel Data Block (Qty, In, Out)
+  const getBlockRowSpan = (dataArray, currentIndex) => {
+    const currentRef = dataArray[currentIndex].channel_ref;
     const currentFamily = dataArray[currentIndex].product_variant;
-    // Assuming channel blocks are grouped by MO + Family
+    
     if (currentIndex > 0 && 
-        dataArray[currentIndex - 1].mo_number === currentMo &&
+        dataArray[currentIndex - 1].channel_ref === currentRef &&
         dataArray[currentIndex - 1].product_variant === currentFamily) {
       return 0; 
     }
@@ -97,7 +94,7 @@ const TBE = () => {
     let span = 1;
     while (
       currentIndex + span < dataArray.length && 
-      dataArray[currentIndex + span].mo_number === currentMo &&
+      dataArray[currentIndex + span].channel_ref === currentRef &&
       dataArray[currentIndex + span].product_variant === currentFamily
     ) {
       span++;
@@ -110,13 +107,13 @@ const TBE = () => {
       <div className="header-section">
         <div>
           <h1>TBE Transit Buffer Tracking</h1>
-          <p className="sub-tag">Priority Base: Ring Wt Transit Buffer Matrix</p>
+          <p className="sub-tag">7-Day Run Sequence Matrix</p>
         </div>
         
         <div className="control-actions">
           <input
             className="search-box"
-            placeholder="Filter by MO or Family Type..."
+            placeholder="Filter by Channel or Family..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             disabled={isInitializing}
@@ -129,8 +126,8 @@ const TBE = () => {
       {isInitializing && (
         <div className="initializing-box">
           <div className="spinner"></div>
-          <p><strong>System Backend Engine Warming Up...</strong></p>
-          <p className="sub-text">Executing localized fuzzy column schema mapping. Streaming soon...</p>
+          <p><strong>Preparing Data Pipelines...</strong></p>
+          <p className="sub-text">Grouping temporal sequences and running 7-day batch analysis...</p>
         </div>
       )}
 
@@ -141,16 +138,15 @@ const TBE = () => {
           <table className="trace-table">
             <thead>
               <tr className="super-header">
-                <th colSpan="4" className="meta-head">Order Metadata</th>
+                <th colSpan="3" className="meta-head">Production Metadata</th>
                 <th colSpan="2" className="sho-head">SHO Department</th>
                 <th colSpan="2" className="tb-head">Transit Buffer</th>
                 <th colSpan="3" className="ch-head">Channel Section (Combined)</th>
                 <th className="meta-head">System Status</th>
               </tr>
               <tr className="sub-header">
-                <th>MO Number</th>
+                <th>Channel Ref</th>
                 <th>Product Variant</th>
-                <th>Target Qty</th>
                 <th>Ring Type</th>
                 <th>Qty</th>
                 <th>In Date</th>
@@ -164,37 +160,35 @@ const TBE = () => {
             </thead>
             <tbody>
               {sortedSummary.map((row, idx) => {
-                const moSpan = getMoRowSpan(sortedSummary, idx);
                 const channelSpan = getChannelRowSpan(sortedSummary, idx);
+                const blockSpan = getBlockRowSpan(sortedSummary, idx);
                 
-                // Construct a deterministic, stable structural key combination
-                const rowKey = `${row.mo_number || 'null'}-${row.product_variant || 'null'}-${row.ring_type || 'null'}-${idx}`;
+                const rowKey = `${row.channel_ref || 'null'}-${row.product_variant || 'null'}-${row.ring_type || 'null'}-${idx}`;
                 
                 return (
                   <tr key={rowKey} className="data-row">
-                    {moSpan > 0 && (
-                      <td rowSpan={moSpan} className="merged-mo-cell fw-bold">
-                        {row.mo_number || '-'}
+                    {channelSpan > 0 && (
+                      <td rowSpan={channelSpan} className="merged-mo-cell fw-bold">
+                        {row.channel_ref || '-'}
                       </td>
                     )}
 
                     <td className="fw-bold text-primary">{row.product_variant}</td>
-                    <td className="qty-cell">{row.target_qty ? Number(row.target_qty).toLocaleString() : ''}</td>
                     <td className="fw-bold">{row.ring_type}</td>
                     
-                    <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : ''}</td>
+                    <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '-'}</td>
                     <td>{row.sho_in || '-'}</td>
                     
-                    <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : ''}</td>
+                    <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '-'}</td>
                     <td>{row.tb_out || '-'}</td>
                     
-                    {channelSpan > 0 && (
+                    {blockSpan > 0 && (
                       <>
-                        <td rowSpan={channelSpan} className="merged-channel-cell fw-bold">
-                          {row.ch_qty !== "" && row.ch_qty !== undefined && row.ch_qty !== null ? Number(row.ch_qty).toLocaleString() : ''}
+                        <td rowSpan={blockSpan} className="merged-channel-cell fw-bold">
+                          {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '0'}
                         </td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
+                        <td rowSpan={blockSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
+                        <td rowSpan={blockSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
                       </>
                     )}
                     
@@ -208,8 +202,8 @@ const TBE = () => {
               })}
               {sortedSummary.length === 0 && (
                 <tr>
-                  <td colSpan="12" className="empty-state">
-                    No matching TBE Tracking data located. Verify source excel documents are populated.
+                  <td colSpan="11" className="empty-state">
+                    No matching TBE Tracking data located. Verify your source sheets are populated.
                   </td>
                 </tr>
               )}
