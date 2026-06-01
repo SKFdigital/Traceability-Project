@@ -22,10 +22,6 @@ CACHE_DURATION_MINUTES = 5
 # ADVANCED RESILIENT HELPERS
 # =========================================================
 def repair_sheet_headers(df):
-    """
-    Self-healing routine. Scans the top rows of a sheet to find where the true 
-    production metrics headers sit, bypassing administrative banners or titles.
-    """
     if df.empty:
         return df
     
@@ -53,7 +49,6 @@ def normalize_channel(value):
     if pd.isna(value): 
         return ""
     val_str = str(value).strip().upper()
-    # Uniformly strip channel/line markers to align sheet names like T3/CH03 down to '3'
     for prefix in ["CH-", "CH.", "CH", "CHANNEL-", "CHANNEL", "T-", "T"]:
         if val_str.startswith(prefix):
             val_str = val_str[len(prefix):].strip()
@@ -134,7 +129,7 @@ def process_tbe_data():
         return
     
     IS_UPDATING = True
-    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Executing Chronological Batching TBE Pipeline...")
+    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Executing Bulletproof Batching TBE Pipeline...")
 
     try:
         from settings import settings
@@ -142,7 +137,7 @@ def process_tbe_data():
         channel_master_sheets = {**load_excel_sheets(settings.TRB_MASTER_URL), **load_excel_sheets(settings.DGBB_MASTER_URL)}
 
         # ---------------------------------------------------------
-        # STEP 1: PARSE CHANNEL MASTER INCREMENTAL PRODUCTION RECORDS
+        # STEP 1: PARSE CHANNEL MASTER INCREMENTAL RECORDS
         # ---------------------------------------------------------
         channel_production_records = []
         
@@ -150,12 +145,10 @@ def process_tbe_data():
             if df.empty or sheet_name in ['Pivot Table 1', 'Pivot Table 2', 'PIC List', 'List']: 
                 continue
             
-            # Find the core identifiers (Excluding 'mo' to prevent misidentifying an MO number column as the channel number)
             c_col = find_column(df, ["channel", "channelno", "channelnum", "machineno", "line"])
             type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "itemdescription", "desc"])
             d_col = find_column(df, ["date", "day", "txndate", "timestamp"])
             
-            # Look for incremental production column first, fallback to standard qty if needed
             prod_col = find_column(df, ["production", "prodqty", "shiftproduction"])
             if not prod_col:
                 prod_col = find_column(df, ["qty", "cumulative", "cum"])
@@ -178,10 +171,7 @@ def process_tbe_data():
 
                 if prod_qty > 0 and date_val:
                     channel_production_records.append({
-                        "ch": ch,
-                        "fam": base_family,
-                        "qty": prod_qty,
-                        "date": date_val
+                        "ch": ch, "fam": base_family, "qty": prod_qty, "date": date_val
                     })
 
         df_ch_prod = pd.DataFrame(channel_production_records)
@@ -239,7 +229,6 @@ def process_tbe_data():
                     current_batch_rows.append(row)
                 else:
                     last_date = current_batch_rows[-1]['date']
-                    # If gap between records is greater than 7 days, seal current batch and spin up a new row
                     if (row['date'] - last_date).days <= 7:
                         current_batch_rows.append(row)
                     else:
@@ -260,7 +249,7 @@ def process_tbe_data():
                 })
 
         # ---------------------------------------------------------
-        # STEP 4: TIME-WINDOWED MATRIX ROW COMPILATION
+        # STEP 4: SAFELY COMPILE MATRIX ROWS (No Silent Skipping)
         # ---------------------------------------------------------
         compiled_summary = []
         
@@ -276,15 +265,14 @@ def process_tbe_data():
             ch_min_date = None
             ch_max_date = None
             
-            # Map channel production that occurred within or closely surrounding this batch's timeframe
+            # Use an ultra-loose time cushion (±14 days) to guarantee we pick up matching production entries
             if not df_ch_prod.empty:
                 mask = (df_ch_prod["ch"] == ch) & (df_ch_prod["fam"] == fam)
                 matched_prod = df_ch_prod[mask]
                 
                 if not matched_prod.empty and start_dt and end_dt:
-                    # Capture production window allowing a tiny buffer cushion for logging latencies
-                    date_mask = (matched_prod["date"] >= (start_dt - pd.Timedelta(days=3))) & \
-                                (matched_prod["date"] <= (end_dt + pd.Timedelta(days=10)))
+                    date_mask = (matched_prod["date"] >= (start_dt - pd.Timedelta(days=14))) & \
+                                (matched_prod["date"] <= (end_dt + pd.Timedelta(days=14)))
                     matched_prod = matched_prod[date_mask]
                     
                 if not matched_prod.empty:
@@ -292,7 +280,6 @@ def process_tbe_data():
                     ch_min_date = matched_prod["date"].min()
                     ch_max_date = matched_prod["date"].max()
 
-            # Assign operational status fields based on specific batch window metrics
             if tb_qty == 0 and ch_qty == 0:
                 calc_status = "Yet to Start"
             elif ch_qty >= tb_qty and tb_qty > 0:
