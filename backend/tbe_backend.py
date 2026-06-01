@@ -139,7 +139,7 @@ def process_tbe_data():
 
     try:
         mo_sheets = load_excel_sheets(settings.MO_DATA_URL)
-        ring_wt_sheets = load_excel_sheets(settings.RING_WT_URL)
+        ring_wt_sheets = load_excel_sheets(settings.RINGWT_TRANSITBUFFER_URL)
         trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
         dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
