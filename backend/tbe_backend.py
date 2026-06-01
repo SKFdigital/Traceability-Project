@@ -18,12 +18,12 @@ MASTER_CACHE = []
 LAST_REFRESH = None
 IS_UPDATING = False
 CACHE_DURATION_MINUTES = 5
-INITIALIZATION_FAILED = False  # Kill switch flag
+INITIALIZATION_FAILED = False  
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # =========================================================
-# SECURITY, CLEANING & PARSING HELPERS
+# CLEANING & PARSING HELPERS
 # =========================================================
 def clean_mo(value):
     if pd.isna(value):
@@ -113,7 +113,7 @@ def fix_excel_headers(df):
     return df
 
 # =========================================================
-# SAFELINK DOWNLOAD LOGIC WITH TIMEOUTS
+# NETWORK EXTRACTION (WITH BROWSER SPOOFING & TIMEOUTS)
 # =========================================================
 def download_excel(url):
     headers = {
@@ -122,41 +122,42 @@ def download_excel(url):
         "Cache-Control": "no-cache"
     }
     
+    print(f"🔄 Requesting download from destination: {url}")
     response = requests.get(url, headers=headers, timeout=90)
     
     if response.status_code != 200:
-        # DIAGNOSTIC: Print out the firewall's response to see what company filter is blocking you
-        print(f"🚨 FIREWALL INTERCEPTED REQUEST! Status Code: {response.status_code}")
-        print(f"Server Response Snippet: {response.text[:500]}")
+        print(f"🚨 NETWORK INTERCEPTED REQUEST! Status Code: {response.status_code}")
+        print(f"Server Response Snippet: {response.text[:300]}")
         raise Exception(f"HTTP {response.status_code}")
         
     return io.BytesIO(response.content)
 
 def load_excel_sheets(url):
-    # Kept the original name so your other sheets don't crash!
     try:
         excel_data = download_excel(url)
         
-        # Smart detection: Process if the URL targets a "Publish to Web" CSV stream
+        # Smart detection: Parse instantly if URL targets a CSV stream
         if "output=csv" in url or "format=csv" in url:
             df = pd.read_csv(excel_data)
             df.columns = [str(c).strip().lower() for c in df.columns]
-            print("✅ CSV data stream extracted successfully.")
+            print("✅ Web CSV data stream extracted successfully.")
             return {"Sheet1": df} 
             
-        # Standard processing for Excel workbooks
+        # Default processing for standard Excel files
         xls = pd.ExcelFile(excel_data)
         sheets = {}
         for sheet in xls.sheet_names:
-            df = pd.read_excel(xls, sheet_name=sheet)
-            df.columns = [str(c).strip().lower() for c in df.columns]
-            sheets[sheet] = df
+            try:
+                df = pd.read_excel(xls, sheet_name=sheet)
+                df.columns = [str(c).strip().lower() for c in df.columns]
+                sheets[sheet] = df
+            except Exception as e:
+                print(f"⚠️ Error parsing sheet [{sheet}]: {str(e)}")
         print(f"✅ Workbook parsed successfully. Found {len(sheets)} sheets.")
         return sheets
     except Exception as e:
         print(f"❌ CRITICAL DOWNLOAD FAILURE: {str(e)}")
         return {}
-
 
 # =========================================================
 # MAIN PROCESSING CORE LOGIC
@@ -172,7 +173,7 @@ def process_tbe_data():
 
     try:
         mo_sheets = load_excel_sheets(settings.MO_DATA_URL)
-        ring_wt_sheets = load_csv_or_excel(settings.RINGWT_TRANSITBUFFER_URL)
+        ring_wt_sheets = load_excel_sheets(settings.RINGWT_TRANSITBUFFER_URL)
         trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
         dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
@@ -340,12 +341,11 @@ t = threading.Thread(target=background_refresh_loop, daemon=True)
 t.start()
 
 # =========================================================
-# ROUTER API SERVICE ENDPOINTS (ANTI-TRAP SETTINGS)
+# ROUTER API SERVICE ENDPOINTS
 # =========================================================
 @router.get("/tbe_all_mos")
 def get_tbe_data():
     if not LAST_REFRESH and not MASTER_CACHE:
-        # If the sync thread failed completely, kill the loading spinner immediately
         if INITIALIZATION_FAILED:
             return {
                 "status": "failed",
