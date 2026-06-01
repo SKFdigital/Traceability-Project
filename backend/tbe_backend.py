@@ -19,7 +19,7 @@ INITIALIZED = False
 CACHE_DURATION_MINUTES = 5
 
 # =========================================================
-# INDESTRUCTIBLE COLUMN MATCHING HELPER
+# RESILIENT HELPERS
 # =========================================================
 def repair_sheet_headers(df):
     if df.empty:
@@ -46,22 +46,25 @@ def repair_sheet_headers(df):
     return df
 
 def find_column(df, patterns):
-    cols_map = {str(c).strip().lower().replace(" ", "").replace("#", "").replace("_", ""): c for c in df.columns}
+    cols = [str(c).strip() for c in df.columns]
     
-    # PASS 1: Strict Exact Matching Only
-    for pattern in patterns:
-        norm_p = pattern.lower().replace(" ", "").replace("#", "").replace("_", "")
-        if norm_p in cols_map:
-            return cols_map[norm_p]
-            
-    # PASS 2: Substring Match Fallback
-    for pattern in patterns:
-        norm_p = pattern.lower().replace(" ", "").replace("#", "").replace("_", "")
+    # Pass 1: Strict Exact Case-Insensitive Match
+    for p in patterns:
+        norm_p = p.lower().replace(" ", "").replace("_", "").replace("#", "")
+        for c in cols:
+            norm_c = c.lower().replace(" ", "").replace("_", "").replace("#", "")
+            if norm_c == norm_p:
+                return c
+                
+    # Pass 2: Substring Match (Disabled for short tokens like 'ch'/'mo' to prevent hijacking)
+    for p in patterns:
+        norm_p = p.lower().replace(" ", "").replace("_", "")
         if len(norm_p) <= 2: 
-            continue 
-        for norm_target, orig_col in cols_map.items():
-            if norm_p in norm_target:
-                return orig_col
+            continue
+        for c in cols:
+            norm_c = c.lower().replace(" ", "").replace("_", "")
+            if norm_p in norm_c or norm_c in norm_p:
+                return c
     return None
 
 def normalize_channel(value):
@@ -125,11 +128,11 @@ def load_excel_sheets(url):
         xls = pd.ExcelFile(io.BytesIO(resp.content))
         return {sheet: repair_sheet_headers(xls.parse(sheet)) for sheet in xls.sheet_names}
     except Exception as e:
-        print(f"⚠️ Sheet stream down on URL: {str(e)}")
+        print(f"⚠️ Sheet stream down: {str(e)}")
         return {}
 
 # =========================================================
-# CORE DATA PIPELINE (OUTER JOIN / NO DROPS)
+# CORE AGGREGATION ENGINE (PURE VARIANT GROUPING)
 # =========================================================
 def process_tbe_data():
     global MASTER_CACHE, LAST_REFRESH, IS_UPDATING, INITIALIZED
@@ -137,7 +140,7 @@ def process_tbe_data():
         return
     
     IS_UPDATING = True
-    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Executing Two-Way Retention Pipeline...")
+    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Processing Clean Variant Aggregation Pipeline...")
 
     try:
         from settings import settings
@@ -145,10 +148,9 @@ def process_tbe_data():
         channel_master_sheets = {**load_excel_sheets(settings.TRB_MASTER_URL), **load_excel_sheets(settings.DGBB_MASTER_URL)}
 
         # ---------------------------------------------------------
-        # STEP 1: PARSE CHANNEL MASTER (RAW LIFT)
+        # STEP 1: EXTRACT & GROUP ALL CHANNEL PRODUCTION RECORDS
         # ---------------------------------------------------------
-        channel_production_records = []
-        
+        ch_list = []
         for sheet_name, df in channel_master_sheets.items():
             if df.empty or sheet_name in ['Pivot Table 1', 'Pivot Table 2', 'PIC List', 'List']: 
                 continue
@@ -156,10 +158,7 @@ def process_tbe_data():
             c_col = find_column(df, ["channel", "channelno", "channelnum", "chref", "machineno", "line", "mo", "ch"])
             type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "itemdescription", "desc", "family"])
             d_col = find_column(df, ["date", "day", "txndate", "timestamp"])
-            
-            prod_col = find_column(df, ["production", "prodqty", "shiftproduction"])
-            if not prod_col:
-                prod_col = find_column(df, ["qty", "cumulative", "cum"])
+            prod_col = find_column(df, ["production", "prodqty", "shiftproduction", "qty", "cumulative"])
 
             if not type_col or not prod_col: 
                 continue
@@ -174,28 +173,34 @@ def process_tbe_data():
                     continue
                 
                 base_family, r_type = parse_family_and_type(prod_str)
-                prod_qty = clean_nan(row.get(prod_col))
-                date_val = parse_date_safe(row.get(d_col))
+                qty = clean_nan(row.get(prod_col))
+                dt = parse_date_safe(row.get(d_col))
 
-                if prod_qty > 0 and date_val:
-                    channel_production_records.append({
-                        "ch": ch, "fam": base_family, "type": r_type, "qty": prod_qty, "date": date_val
-                    })
+                if qty > 0:  # Kept regardless of date formatting status
+                    ch_list.append({"ch": ch, "fam": base_family, "type": r_type, "qty": qty, "date": dt})
 
-        df_ch_prod = pd.DataFrame(channel_production_records)
+        if ch_list:
+            df_ch_raw = pd.DataFrame(ch_list)
+            df_ch_grouped = df_ch_raw.groupby(["ch", "fam", "type"]).agg(
+                ch_qty=('qty', 'sum'),
+                ch_min_date=('date', lambda x: min([d for d in x if d is not None], default=None)),
+                ch_max_date=('date', lambda x: max([d for d in x if d is not None], default=None))
+            ).reset_index()
+        else:
+            df_ch_grouped = pd.DataFrame(columns=["ch", "fam", "type", "ch_qty", "ch_min_date", "ch_max_date"])
 
         # ---------------------------------------------------------
-        # STEP 2: PARSE TRANSIT BUFFER RECORDS
+        # STEP 2: EXTRACT & GROUP ALL TRANSIT BUFFER RECORDS
         # ---------------------------------------------------------
-        raw_ring_data = []
+        tb_list = []
         for sheet_name, df in ring_wt_sheets.items():
             if df.empty: 
                 continue
             
             c_col = find_column(df, ["channelref", "channel", "channelno", "channelnum", "machineno", "mo", "line", "ch"])
             f_col = find_column(df, ["ringfamily", "family", "type", "variant", "product", "item", "itemdescription", "desc", "part"])
-            q_col = find_column(df, ["qty", "quantity", "noofrings", "rings", "totalqtyrecd", "recdqty", "production", "total"])
-            d_col = find_column(df, ["date", "indate", "outdate", "day", "txndate", "timestamp"])
+            q_col = find_column(df, ["qty", "quantity", "noofrings", "rings", "totalqtyrecd", "recdqty"])
+            d_col = find_column(df, ["date", "indate", "outdate", "day", "txndate"])
 
             if not f_col or not q_col: 
                 continue
@@ -203,7 +208,7 @@ def process_tbe_data():
             for _, row in df.iterrows():
                 ch = normalize_channel(row.get(c_col)) if c_col else normalize_channel(sheet_name)
                 if not ch or ch == "0": 
-                    ch = normalize_channel(sheet_name) 
+                    ch = normalize_channel(sheet_name)
                 
                 prod_text = str(row.get(f_col)).strip().upper()
                 if prod_text in ["", "NAN"]: 
@@ -213,101 +218,73 @@ def process_tbe_data():
                 qty = clean_nan(row.get(q_col))
                 dt = parse_date_safe(row.get(d_col))
 
-                if qty > 0 and dt:
-                    raw_ring_data.append({"ch": ch, "fam": base_family, "type": r_type, "qty": qty, "date": dt})
+                if qty > 0:  # Kept regardless of date formatting status
+                    tb_list.append({"ch": ch, "fam": base_family, "type": r_type, "qty": qty, "date": dt})
 
-        df_rings = pd.DataFrame(raw_ring_data)
-        
-        if df_rings.empty and df_ch_prod.empty:
-            print("⚠️ Pipeline Warning: No records found in any sheet.")
+        if tb_list:
+            df_tb_raw = pd.DataFrame(tb_list)
+            df_tb_grouped = df_tb_raw.groupby(["ch", "fam", "type"]).agg(
+                tb_qty=('qty', 'sum'),
+                tb_min_date=('date', lambda x: min([d for d in x if d is not None], default=None)),
+                tb_max_date=('date', lambda x: max([d for d in x if d is not None], default=None))
+            ).reset_index()
+        else:
+            df_tb_grouped = pd.DataFrame(columns=["ch", "fam", "type", "tb_qty", "tb_min_date", "tb_max_date"])
+
+        # ---------------------------------------------------------
+        # STEP 3: PURE FULL OUTER JOIN BY VARIANT ON THE CHANNEL
+        # ---------------------------------------------------------
+        if df_tb_grouped.empty and df_ch_grouped.empty:
             MASTER_CACHE = []
             LAST_REFRESH = datetime.now()
             return
 
-        # ---------------------------------------------------------
-        # STEP 3: THE TWO-WAY MERGE (NO DROPS)
-        # ---------------------------------------------------------
-        compiled_summary = []
-        matched_ch_indices = set()
+        merged = pd.merge(df_tb_grouped, df_ch_grouped, on=["ch", "fam", "type"], how="outer")
         
-        # PASS A: Process all Transit Buffer rows (with or without channel match)
-        if not df_rings.empty:
-            for _, row in df_rings.iterrows():
-                ch = row["ch"]
-                fam = row["fam"]
-                r_type = row["type"]
-                tb_qty = row["qty"]
-                dt = row["date"]
-                
-                ch_qty = 0.0
-                ch_min_date = None
-                ch_max_date = None
-                
-                # Check for Channel Match
-                if not df_ch_prod.empty and dt:
-                    mask = (df_ch_prod["ch"] == ch) & (df_ch_prod["fam"] == fam) & (df_ch_prod["date"] == dt)
-                    matched_prod = df_ch_prod[mask]
-                    
-                    if not matched_prod.empty:
-                        ch_qty = matched_prod["qty"].sum()
-                        ch_min_date = matched_prod["date"].min()
-                        ch_max_date = matched_prod["date"].max()
-                        matched_ch_indices.update(matched_prod.index.tolist()) # Mark as used
+        compiled_summary = []
+        for _, row in merged.iterrows():
+            ch = row["ch"]
+            fam = row["fam"]
+            r_type = row["type"]
+            
+            tb_qty = clean_nan(row.get("tb_qty"))
+            ch_qty = clean_nan(row.get("ch_qty"))
+            
+            tb_min = row.get("tb_min_date")
+            tb_max = row.get("tb_max_date")
+            ch_min = row.get("ch_min_date")
+            ch_max = row.get("ch_max_date")
 
-                if tb_qty == 0 and ch_qty == 0:
-                    calc_status = "Yet to Start"
-                elif ch_qty >= tb_qty and tb_qty > 0:
-                    calc_status = "Completed"
-                else:
-                    calc_status = "In Process"
+            # Determine statuses based strictly on grouped metrics
+            if tb_qty == 0 and ch_qty > 0:
+                calc_status = "Channel Only"
+            elif tb_qty > 0 and ch_qty == 0:
+                calc_status = "Yet to Start"
+            elif ch_qty >= tb_qty:
+                calc_status = "Completed"
+            else:
+                calc_status = "In Process"
 
-                compiled_summary.append({
-                    "channel_ref": ch,
-                    "product_variant": fam,
-                    "ring_type": r_type,
-                    "sho_qty": tb_qty, 
-                    "sho_in": str(dt) if dt else "-",
-                    "tb_qty": tb_qty,
-                    "tb_out": str(dt) if dt else "-",
-                    "ch_qty": ch_qty,
-                    "ch_in": str(ch_min_date) if ch_min_date else "-",
-                    "ch_out": str(ch_max_date) if ch_max_date else "-",
-                    "status": calc_status
-                })
+            compiled_summary.append({
+                "channel_ref": ch,
+                "product_variant": fam,
+                "ring_type": r_type,
+                "sho_qty": tb_qty, 
+                "sho_in": str(tb_min) if pd.notna(tb_min) and tb_min else "-",
+                "tb_qty": tb_qty,
+                "tb_out": str(tb_max) if pd.notna(tb_max) and tb_max else "-",
+                "ch_qty": ch_qty,
+                "ch_in": str(ch_min) if pd.notna(ch_min) and ch_min else "-",
+                "ch_out": str(ch_max) if pd.notna(ch_max) and ch_max else "-",
+                "status": calc_status
+            })
 
-        # PASS B: Append any orphaned Channel Production records (In Channel, but not in Transit)
-        if not df_ch_prod.empty:
-            unmatched_ch = df_ch_prod[~df_ch_prod.index.isin(matched_ch_indices)]
-            if not unmatched_ch.empty:
-                grouped = unmatched_ch.groupby(["ch", "fam", "type", "date"])
-                for (ch, fam, r_type, dt), group in grouped:
-                    ch_qty = group["qty"].sum()
-                    if ch_qty > 0:
-                        compiled_summary.append({
-                            "channel_ref": ch,
-                            "product_variant": fam,
-                            "ring_type": r_type,
-                            "sho_qty": 0.0, 
-                            "sho_in": "-",
-                            "tb_qty": 0.0,
-                            "tb_out": "-",
-                            "ch_qty": ch_qty,
-                            "ch_in": str(dt),
-                            "ch_out": str(dt),
-                            "status": "Channel Only"
-                        })
-
-        # Sort the final combined list cleanly
-        compiled_summary.sort(key=lambda x: (
-            x["channel_ref"], 
-            x["product_variant"], 
-            x["ring_type"], 
-            x["sho_in"] if x["sho_in"] != "-" else x["ch_in"]
-        ))
+        # Sort cleanly by channel and product family
+        compiled_summary.sort(key=lambda x: (x["channel_ref"], x["product_variant"], x["ring_type"]))
         
         MASTER_CACHE = compiled_summary
         LAST_REFRESH = datetime.now()
-        print(f"✅ [Engine Complete] Successfully processed {len(MASTER_CACHE)} total records (Two-Way Retention).")
+        print(f"✅ [Engine Complete] Clean Outer-Join Aggregation complete. Total Groups: {len(MASTER_CACHE)}")
 
     except Exception as e:
         print(f"❌ CRITICAL RUNTIME EXCEPTION IN LIVE AGGREGATION: {str(e)}")
