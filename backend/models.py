@@ -184,6 +184,34 @@ class RingWeightTransitBuffer(Base):
     # The Bridge: This is populated by matching channel_no to TBEMaster/TRBMaster/DGBBMaster
     normalized_mo = Column(String, index=True, nullable=True)
 
+class IndustrialWeightConfirmation(Base):
+    __tablename__ = 'industrial_weight_confirmation'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Core Identifiers
+    date = Column(Date, index=True, nullable=True)
+    shift = Column(String, nullable=True)
+    channel_no = Column(String, index=True, nullable=False)   # Mapped from 'Ch# No'
+    component_type = Column(String, index=True, nullable=False) # Mapped from 'TYPE' (e.g., 'IM6306')
+    
+    # Weight Metrics (All Floats based on sample decimal precision)
+    gross_weight = Column(Float, default=0.0)                 # 'Gr Wt'
+    empty_box_weight = Column(Float, default=0.0)             # 'Empty Box Wt'
+    pallet_weight = Column(Float, default=0.0)                # 'Pallat Wt'
+    net_weight = Column(Float, default=0.0)                   # 'Net Wt'
+    ring_weight = Column(Float, default=0.0)                  # 'Ring Wt'
+    
+    # Quantities & Analysis
+    no_of_rings = Column(Float, default=0.0)                  # 'No Of Rings' (Using Float for 1742.34)
+    remarks = Column(String, nullable=True)                   # 'REMARKS'
+    std_box_qty = Column(Float, default=0.0)                  # 'STD BOX QTY'
+    std_vs_weight_diff_qty = Column(Float, default=0.0)       # 'Std Vs Weigt Diff Qty'
+    
+    # Bridge / Tracking Column (Optional, based on your Traceability pattern)
+    normalized_mo = Column(String, index=True, nullable=True)
+
+
 class TraceabilityMaster(Base):
     __tablename__ = 'traceability_master'
     id = Column(Integer, primary_key=True, index=True)
