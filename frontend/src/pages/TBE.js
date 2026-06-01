@@ -14,7 +14,6 @@ const TBE = () => {
 
   useEffect(() => {
     fetchTBEDashboard();
-    
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
@@ -26,7 +25,7 @@ const TBE = () => {
       setError('');
 
       const res = await fetch(`${API}/tbe_all_mos`);
-      if (!res.ok) throw new Error('Network error pulling records from pipeline.');
+      if (!res.ok) throw new Error('Network pipeline connection timeout.');
       
       const json = await res.json();
       
@@ -37,10 +36,6 @@ const TBE = () => {
       } else if (json.status === 'success') {
         setIsInitializing(false);
         setSummaryData(json.data || []);
-      } else if (json.status === 'failed') {
-        setIsInitializing(false);
-        setError(json.message || 'The data pipeline extraction failed.');
-        setSummaryData([]);
       }
     } catch (err) {
       setError(err.message);
@@ -49,13 +44,13 @@ const TBE = () => {
     }
   };
 
-  // 1. Dynamic Filtering (Filters by Channel Reference or Product Family)
+  // 1. Text Filters (Searches across common connection fields: Channel or Ring Family)
   const filteredSummary = summaryData.filter(item => 
     (item.channel_ref && String(item.channel_ref).toLowerCase().includes(search.toLowerCase())) ||
     (item.product_variant && String(item.product_variant).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // 2. Multi-tier Sorting (Ensures layout stability for merging rows)
+  // 2. Strict Deterministic Sorter (Locks order hierarchy: Channel -> Family -> Ring Type)
   const sortedSummary = [...filteredSummary].sort((a, b) => {
     if (a.channel_ref !== b.channel_ref) {
       return String(a.channel_ref || '').localeCompare(String(b.channel_ref || ''));
@@ -66,10 +61,10 @@ const TBE = () => {
     return String(a.ring_type || '').localeCompare(String(b.ring_type || ''));
   });
 
-  // 3. Row Span Generation: Channel Column
+  // 3. Grid Layout Span Builder: Channel Axis Primary Column
   const getChannelRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
-    if (!currentRef) return 1; 
+    if (!currentRef) return 1;
     if (currentIndex > 0 && dataArray[currentIndex - 1].channel_ref === currentRef) {
       return 0; 
     }
@@ -80,8 +75,8 @@ const TBE = () => {
     return span;
   };
 
-  // 4. Row Span Generation: Channel Data Block (Qty, In, Out)
-  const getBlockRowSpan = (dataArray, currentIndex) => {
+  // 4. Grid Layout Span Builder: Combined Channel Data Frame Blocks
+  const getChannelBlockRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
     const currentFamily = dataArray[currentIndex].product_variant;
     
@@ -106,14 +101,14 @@ const TBE = () => {
     <div className="traceability-container">
       <div className="header-section">
         <div>
-          <h1>TBE Transit Buffer Tracking</h1>
-          <p className="sub-tag">7-Day Run Sequence Matrix</p>
+          <h1>TBE Tracking Log</h1>
+          <p className="sub-tag">Synchronized Channel & Ring Family Sequencing</p>
         </div>
         
         <div className="control-actions">
           <input
             className="search-box"
-            placeholder="Filter by Channel or Family..."
+            placeholder="Search Channel or Ring Family..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             disabled={isInitializing}
@@ -121,32 +116,32 @@ const TBE = () => {
         </div>
       </div>
 
-      {error && <div className="error-box">⚠️ {error}</div>}
+      {error && <div className="error-box">⚠️ Error: {error}</div>}
       
       {isInitializing && (
         <div className="initializing-box">
           <div className="spinner"></div>
-          <p><strong>Preparing Data Pipelines...</strong></p>
-          <p className="sub-text">Grouping temporal sequences and running 7-day batch analysis...</p>
+          <p><strong>Rebuilding Database Pipeline Caches...</strong></p>
+          <p className="sub-text">Grouping channels, calculating max cumulative assemblies, and processing 7-day windows...</p>
         </div>
       )}
 
-      {loading && !isInitializing && <div className="loading-spinner">Synchronizing pipeline data stream...</div>}
+      {loading && !isInitializing && <div className="loading-spinner">Fetching live spreadsheet records...</div>}
 
       {!loading && !isInitializing && (
         <div className="table-wrapper">
           <table className="trace-table">
             <thead>
               <tr className="super-header">
-                <th colSpan="3" className="meta-head">Production Metadata</th>
+                <th colSpan="3" className="meta-head">Connection Mapping</th>
                 <th colSpan="2" className="sho-head">SHO Department</th>
                 <th colSpan="2" className="tb-head">Transit Buffer</th>
-                <th colSpan="3" className="ch-head">Channel Section (Combined)</th>
-                <th className="meta-head">System Status</th>
+                <th colSpan="3" className="ch-head">Channel Section (Combined Rollup)</th>
+                <th className="meta-head">Status Tracker</th>
               </tr>
               <tr className="sub-header">
                 <th>Channel Ref</th>
-                <th>Product Variant</th>
+                <th>Ring Family</th>
                 <th>Ring Type</th>
                 <th>Qty</th>
                 <th>In Date</th>
@@ -161,12 +156,13 @@ const TBE = () => {
             <tbody>
               {sortedSummary.map((row, idx) => {
                 const channelSpan = getChannelRowSpan(sortedSummary, idx);
-                const blockSpan = getBlockRowSpan(sortedSummary, idx);
+                const channelBlockSpan = getChannelBlockRowSpan(sortedSummary, idx);
                 
-                const rowKey = `${row.channel_ref || 'null'}-${row.product_variant || 'null'}-${row.ring_type || 'null'}-${idx}`;
+                const uniqueKey = `${row.channel_ref || 'blank'}-${row.product_variant || 'blank'}-${row.ring_type || 'blank'}-${idx}`;
                 
                 return (
-                  <tr key={rowKey} className="data-row">
+                  <tr key={uniqueKey} className="data-row">
+                    {/* Channel Column Merged Output */}
                     {channelSpan > 0 && (
                       <td rowSpan={channelSpan} className="merged-mo-cell fw-bold">
                         {row.channel_ref || '-'}
@@ -182,13 +178,14 @@ const TBE = () => {
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '-'}</td>
                     <td>{row.tb_out || '-'}</td>
                     
-                    {blockSpan > 0 && (
+                    {/* Channel Block Columns Merged Output (Grouped strictly by Channel + Family) */}
+                    {channelBlockSpan > 0 && (
                       <>
-                        <td rowSpan={blockSpan} className="merged-channel-cell fw-bold">
+                        <td rowSpan={channelBlockSpan} className="merged-channel-cell fw-bold">
                           {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '0'}
                         </td>
-                        <td rowSpan={blockSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
-                        <td rowSpan={blockSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
+                        <td rowSpan={channelBlockSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
+                        <td rowSpan={channelBlockSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
                       </>
                     )}
                     
@@ -203,7 +200,7 @@ const TBE = () => {
               {sortedSummary.length === 0 && (
                 <tr>
                   <td colSpan="11" className="empty-state">
-                    No matching TBE Tracking data located. Verify your source sheets are populated.
+                    No active tracking metrics found matching the connection properties.
                   </td>
                 </tr>
               )}
