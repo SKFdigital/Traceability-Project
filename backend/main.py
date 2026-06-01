@@ -234,3 +234,9 @@ def create_chatbot_log(log: dict = Body(...), db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_log)
     return {"message": "Chatbot log added", "chatbot_log_id": new_log.id}
+
+
+@app.get("/tbe_all_mos")
+def get_tbe_all_mos():
+    # Your existing code here...
+    return {"status": "success"}
