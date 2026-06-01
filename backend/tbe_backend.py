@@ -22,11 +22,43 @@ CACHE_DURATION_MINUTES = 5
 # =========================================================
 # ADVANCED RESILIENT HELPERS
 # =========================================================
+def repair_sheet_headers(df):
+    """
+    Self-healing routine. Scans the top rows of a sheet to find where the true 
+    production metrics headers sit, bypassing administrative banners or titles.
+    """
+    if df.empty:
+        return df
+    
+    # Structural column markers to look for
+    targets = {"ch", "channel", "type", "variant", "product", "item", "qty", "quantity", "rings", "date", "mo", "production"}
+    
+    # Test if current headers are already completely valid
+    current_cols = [str(c).strip().lower().replace(" ", "") for c in df.columns]
+    if sum(1 for t in targets if any(t in c for c in current_cols)) >= 2:
+        if not any("unnamed:" in str(c).lower() for c in df.columns[:2]):
+            return df
+            
+    # Scan the first 10 rows to locate where the true data matrix table begins
+    for idx in range(min(10, len(df))):
+        row_vals = [str(val).strip().lower().replace(" ", "") for val in df.iloc[idx].dropna()]
+        match_count = sum(1 for t in targets if any(t in v for v in row_vals))
+        
+        if match_count >= 2:
+            new_cols = df.iloc[idx].tolist()
+            # String clean step
+            new_cols = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(new_cols)]
+            repaired_df = df.iloc[idx+1:].copy()
+            repaired_df.columns = new_cols
+            print(f"🎯 Repaired sheet matrix structure at row index {idx}. Columns: {new_cols[:5]}")
+            return repaired_df.reset_index(drop=True)
+            
+    return df
+
 def normalize_channel(value):
     if pd.isna(value): 
         return ""
     val_str = str(value).strip().upper()
-    # Stripping away common decorative formatting markers
     for prefix in ["CH-", "CH.", "CH", "CHANNEL-", "CHANNEL"]:
         if val_str.startswith(prefix):
             val_str = val_str[len(prefix):].strip()
@@ -41,10 +73,8 @@ def parse_family_and_type(prod_text):
     if not text or text in ["NAN", "NONE", ""]: 
         return "UNKNOWN", "Assembly"
     
-    # Isolate component type matching the reference system rules
     r_type = "IM" if any(x in text for x in ["IM", "IR"]) else ("OM" if any(x in text for x in ["OM", "OR"]) else "Assembly")
     
-    # Aggressively strip structural tags to get the common raw family identity string
     clean = text
     prefixes = ["IM-", "OM-", "IR-", "OR-", "IM", "OM", "TRB-", "DGBB-", "CH-"]
     for p in prefixes:
@@ -58,16 +88,11 @@ def parse_family_and_type(prod_text):
     return clean.strip(" -_"), r_type
 
 def find_column(df, patterns):
-    """
-    Fuzzy normalizer for column matching. Strips casing, hashes, spaces, and 
-    underscores to match variants like 'Ch #', 'CH__no', or 'Channel'.
-    """
     cols_map = {str(c).strip().lower().replace(" ", "").replace("#", "").replace("_", ""): c for c in df.columns}
     for pattern in patterns:
         norm_p = pattern.lower().replace(" ", "").replace("#", "").replace("_", "")
         if norm_p in cols_map:
             return cols_map[norm_p]
-        # Secondary substring safety search
         for normalized_target, original_col in cols_map.items():
             if norm_p in normalized_target or normalized_target in norm_p:
                 return original_col
@@ -96,7 +121,9 @@ def load_excel_sheets(url):
         if resp.status_code != 200: 
             return {}
         xls = pd.ExcelFile(io.BytesIO(resp.content))
-        return {sheet: xls.parse(sheet) for sheet in xls.sheet_names}
+        
+        # Load sheets and automatically correct layout shifts / titles on the fly
+        return {sheet: repair_sheet_headers(xls.parse(sheet)) for sheet in xls.sheet_names}
     except Exception as e:
         print(f"⚠️ Sheet stream down on URL {url}: {str(e)}")
         return {}
@@ -117,19 +144,6 @@ def process_tbe_data():
         channel_master_sheets = {**load_excel_sheets(settings.TRB_MASTER_URL), **load_excel_sheets(settings.DGBB_MASTER_URL)}
 
         # ---------------------------------------------------------
-        # DIAGNOSTIC LOGGING: Expose raw workbook column keys
-        # ---------------------------------------------------------
-        print("\n=== 🔍 TBE WORKBOOK SCHEMA DIAGNOSTICS ===")
-        print(f"Transit Buffer Sheets Detected: {list(ring_wt_sheets.keys())}")
-        for sheet, df in ring_wt_sheets.items():
-            print(f" -> Sheet '{sheet}': Raw Headers Found -> {list(df.columns)}")
-            
-        print(f"\nChannel Master Sheets Detected: {list(channel_master_sheets.keys())}")
-        for sheet, df in channel_master_sheets.items():
-            print(f" -> Sheet '{sheet}': Raw Headers Found -> {list(df.columns)}")
-        print("===========================================\n")
-
-        # ---------------------------------------------------------
         # STEP 1: COMPUTE CHANNEL QUALITIES (Max_Cum Targets)
         # ---------------------------------------------------------
         channel_variant_maxes = {}
@@ -138,14 +152,12 @@ def process_tbe_data():
             if df.empty: 
                 continue
             
-            # Expanded fuzzy variations mapping to tracking configurations
-            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "line"])
+            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "line", "mo"])
             type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "itemdescription", "desc", "family"])
-            cum_col = find_column(df, ["cumulative", "cum", "totalproduction", "prodqty", "totalqty", "total", "count"])
-            d_col = find_column(df, ["date", "day", "txndate", "timestamp", "time"])
+            cum_col = find_column(df, ["cumulative", "cum", "totalproduction", "prodqty", "cumulativeproduction", "totalqty", "total"])
+            d_col = find_column(df, ["date", "day", "txndate", "timestamp"])
 
             if not type_col or not cum_col: 
-                print(f"⚠️ Channel Master Sheet '{sheet_name}' skipped. Missing variant/type mapping or cumulative value columns.")
                 continue
 
             for _, row in df.iterrows():
@@ -194,13 +206,12 @@ def process_tbe_data():
             if df.empty: 
                 continue
             
-            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "line"])
+            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "mo"])
             f_col = find_column(df, ["type", "variant", "product", "item", "itemdescription", "desc", "family"])
-            q_col = find_column(df, ["noofrings", "quantity", "qty", "rings", "totalqtyrecd", "recdqty", "balqty", "volume"])
-            d_col = find_column(df, ["date", "day", "txndate", "timestamp", "time"])
+            q_col = find_column(df, ["noofrings", "quantity", "qty", "rings", "totalqtyrecd", "recdqty", "production"])
+            d_col = find_column(df, ["date", "day", "txndate", "timestamp"])
 
             if not f_col or not q_col: 
-                print(f"⚠️ Transit Buffer Sheet '{sheet_name}' skipped. Missing item descriptions or quantity metrics.")
                 continue
 
             for _, row in df.iterrows():
