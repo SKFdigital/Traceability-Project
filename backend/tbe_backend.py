@@ -18,11 +18,12 @@ MASTER_CACHE = []
 LAST_REFRESH = None
 IS_UPDATING = False
 CACHE_DURATION_MINUTES = 5
+INITIALIZATION_FAILED = False  # Kill switch flag
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # =========================================================
-# SECURITY, CLEANING & PARSING HELPERS (From Traceability)
+# SECURITY, CLEANING & PARSING HELPERS
 # =========================================================
 def clean_mo(value):
     if pd.isna(value):
@@ -38,7 +39,6 @@ def normalize_text(value):
     return str(value).strip()
 
 def clean_nan(value):
-    """Aggressive NaN cleaner to prevent frontend JSON crashes."""
     try:
         if pd.isna(value) or str(value).strip().lower() in ['nan', '-', '...', '']:
             return 0.0
@@ -50,7 +50,6 @@ def clean_nan(value):
         return 0.0
 
 def parse_date_safe(value):
-    """Safely parses dates and ensures NaT does not break JSON."""
     try:
         if pd.isna(value) or str(value).strip().lower() in ["nan", "nat", "", "-"]:
             return None
@@ -101,7 +100,6 @@ def find_column(df, patterns):
     return None
 
 def fix_excel_headers(df):
-    """Scans rows to bypass titles and find actual table headers."""
     if find_column(df, ["type", "variant", "bearing family"]) and find_column(df, ["ch#", "channel", "chan", "ch"]):
         return df
     
@@ -115,16 +113,17 @@ def fix_excel_headers(df):
     return df
 
 # =========================================================
-# FILE DOWNLOAD LOGIC (From Traceability + Diagnostics)
+# SAFELINK DOWNLOAD LOGIC WITH TIMEOUTS
 # =========================================================
 def download_excel(url):
-    response = requests.get(url)
+    # Added explicit 15-second timeout to prevent terminal hanging
+    response = requests.get(url, timeout=15)
     if response.status_code != 200:
-        raise Exception(f"Failed HTTP {response.status_code} downloading excel from {url}")
+        raise Exception(f"HTTP {response.status_code}")
     return io.BytesIO(response.content)
 
 def load_excel_sheets(url):
-    print(f"Attempting to load: {url}")
+    print(f"🔄 Requesting workbook download from destination: {url}")
     try:
         excel_data = download_excel(url)
         xls = pd.ExcelFile(excel_data)
@@ -135,18 +134,18 @@ def load_excel_sheets(url):
                 df.columns = [str(c).strip().lower() for c in df.columns]
                 sheets[sheet] = df
             except Exception as e:
-                print(f"⚠️ Error reading sheet [{sheet}]: {str(e)}")
-        print(f"✅ SUCCESS: Loaded {len(sheets)} sheets from {url}")
+                print(f"⚠️ Error parsing sheet [{sheet}]: {str(e)}")
+        print(f"✅ Workbook parsed successfully. Found {len(sheets)} sheets.")
         return sheets
     except Exception as e:
-        print(f"❌ CRITICAL DOWNLOAD FAILURE for {url}: {str(e)}")
+        print(f"❌ CRITICAL DOWNLOAD FAILURE: {str(e)}")
         return {}
 
 # =========================================================
 # MAIN PROCESSING CORE LOGIC
 # =========================================================
 def process_tbe_data():
-    global MASTER_CACHE, LAST_REFRESH, IS_UPDATING
+    global MASTER_CACHE, LAST_REFRESH, IS_UPDATING, INITIALIZATION_FAILED
     
     if IS_UPDATING:
         return
@@ -160,7 +159,6 @@ def process_tbe_data():
         trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
         dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
-        # DIAGNOSTIC CHECK
         print("\n--- DIAGNOSTIC DATA CHECK ---")
         print(f"MO Sheets Found: {bool(mo_sheets)}")
         print(f"Ring Wt Sheets Found: {bool(ring_wt_sheets)}")
@@ -169,7 +167,8 @@ def process_tbe_data():
         print("-----------------------------\n")
 
         if not ring_wt_sheets:
-            print("🚨 ABORTING TBE PARSE: ring_wt_sheets failed to download or parse. Cannot build matrix.")
+            print("🚨 ABORTING TBE PARSE: ring_wt_sheets is totally missing. Pipeline cannot build anchor fields.")
+            INITIALIZATION_FAILED = True
             return
 
         # ---------------------------------------------------------
@@ -304,15 +303,16 @@ def process_tbe_data():
         compiled_summary.sort(key=lambda x: (x["mo_number"], x["product_variant"], x["ring_type"]))
         
         MASTER_CACHE = compiled_summary
+        INITIALIZATION_FAILED = False
         LAST_REFRESH = datetime.now()
         print(f"[{datetime.now()}] SUCCESS: TBE MATRIX SYNCHRONIZED. ROWS PROCESSED: {len(MASTER_CACHE)}")
 
     except Exception as e:
         print(f"CRITICAL TBE DATA THREAD ERROR: {str(e)}")
+        INITIALIZATION_FAILED = True
     finally:
         IS_UPDATING = False
 
-# Background Daemon initialization
 def background_refresh_loop():
     process_tbe_data()
     while True:
@@ -323,11 +323,18 @@ t = threading.Thread(target=background_refresh_loop, daemon=True)
 t.start()
 
 # =========================================================
-# ROUTER API SERVICE ENDPOINTS
+# ROUTER API SERVICE ENDPOINTS (ANTI-TRAP SETTINGS)
 # =========================================================
 @router.get("/tbe_all_mos")
 def get_tbe_data():
     if not LAST_REFRESH and not MASTER_CACHE:
+        # If the sync thread failed completely, kill the loading spinner immediately
+        if INITIALIZATION_FAILED:
+            return {
+                "status": "failed",
+                "message": "Data stream extraction failed. Look at your server terminal logs right now to see the error.",
+                "data": []
+            }
         return {
             "status": "initializing",
             "message": "System maps are being prepared. Please hold...",
