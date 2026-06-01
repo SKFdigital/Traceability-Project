@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './TBE.css';
 
 const API = 'https://scm-backend-pshv.onrender.com';
@@ -9,15 +9,24 @@ const TBE = () => {
   const [loading, setLoading] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState('');
+  
+  const timerRef = useRef(null);
 
   useEffect(() => {
     fetchTBEDashboard();
+    
+    // Cleanup any lingering timers on unmount
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, []);
 
   const fetchTBEDashboard = async () => {
     try {
-      setLoading(true);
+      // Only show top-level loading indicator if not already in initialization polling mode
+      if (!isInitializing) setLoading(true);
       setError('');
+
       const res = await fetch(`${API}/tbe_all_mos`);
       if (!res.ok) throw new Error('Network error pulling records from pipeline.');
       
@@ -25,10 +34,16 @@ const TBE = () => {
       
       if (json.status === 'initializing') {
         setIsInitializing(true);
-        setTimeout(fetchTBEDashboard, 4000);
+        setSummaryData([]);
+        // Safely queue the next poll
+        timerRef.current = setTimeout(fetchTBEDashboard, 4000);
       } else if (json.status === 'success') {
         setIsInitializing(false);
         setSummaryData(json.data || []);
+      } else if (json.status === 'failed') {
+        setIsInitializing(false);
+        setError(json.message || 'The data pipeline extraction failed.');
+        setSummaryData([]);
       }
     } catch (err) {
       setError(err.message);
@@ -43,12 +58,15 @@ const TBE = () => {
     (item.product_variant && String(item.product_variant).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // 2. Row Stability Sorting
+  // 2. Multi-tier Row Stability Sorting (Aligned perfectly with Backend Pipeline Specs)
   const sortedSummary = [...filteredSummary].sort((a, b) => {
     if (a.mo_number !== b.mo_number) {
       return (a.mo_number || '').localeCompare(b.mo_number || '');
     }
-    return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
+    if (a.product_variant !== b.product_variant) {
+      return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
+    }
+    return String(a.ring_type || '').localeCompare(String(b.ring_type || ''));
   });
 
   // 3. Row Span Generation: MO Columns
@@ -109,7 +127,7 @@ const TBE = () => {
         </div>
       </div>
 
-      {error && <div className="error-box">{error}</div>}
+      {error && <div className="error-box">⚠️ {error}</div>}
       
       {isInitializing && (
         <div className="initializing-box">
@@ -152,8 +170,11 @@ const TBE = () => {
                 const moSpan = getMoRowSpan(sortedSummary, idx);
                 const channelSpan = getChannelRowSpan(sortedSummary, idx);
                 
+                // Construct a deterministic, stable structural key combination
+                const rowKey = `${row.mo_number || 'null'}-${row.product_variant || 'null'}-${row.ring_type || 'null'}-${idx}`;
+                
                 return (
-                  <tr key={idx} className="data-row">
+                  <tr key={rowKey} className="data-row">
                     {moSpan > 0 && (
                       <td rowSpan={moSpan} className="merged-mo-cell fw-bold">
                         {row.mo_number || '-'}
@@ -165,18 +186,18 @@ const TBE = () => {
                     <td className="fw-bold">{row.ring_type}</td>
                     
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : ''}</td>
-                    <td>{row.sho_in}</td>
+                    <td>{row.sho_in || '-'}</td>
                     
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : ''}</td>
-                    <td>{row.tb_out}</td>
+                    <td>{row.tb_out || '-'}</td>
                     
                     {channelSpan > 0 && (
                       <>
                         <td rowSpan={channelSpan} className="merged-channel-cell fw-bold">
-                          {row.ch_qty !== "" ? Number(row.ch_qty).toLocaleString() : ''}
+                          {row.ch_qty !== "" && row.ch_qty !== undefined && row.ch_qty !== null ? Number(row.ch_qty).toLocaleString() : ''}
                         </td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_in}</td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_out}</td>
+                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
+                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
                       </>
                     )}
                     
