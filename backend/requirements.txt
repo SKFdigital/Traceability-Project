@@ -3,6 +3,7 @@ fastapi
 uvicorn[standard]
 
 openpyxl
+python-calamine
 
 # Database & ORM
 sqlalchemy
