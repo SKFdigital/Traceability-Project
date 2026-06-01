@@ -6,7 +6,6 @@ import threading
 import time
 import math
 from datetime import datetime
-from settings import settings
 
 router = APIRouter()
 
@@ -16,7 +15,7 @@ router = APIRouter()
 MASTER_CACHE = []
 LAST_REFRESH = None
 IS_UPDATING = False
-INITIALIZED = False  # Hard guard to prevent infinite loading screens
+INITIALIZED = False  
 CACHE_DURATION_MINUTES = 5
 
 # =========================================================
@@ -30,16 +29,13 @@ def repair_sheet_headers(df):
     if df.empty:
         return df
     
-    # Structural column markers to look for
-    targets = {"ch", "channel", "type", "variant", "product", "item", "qty", "quantity", "rings", "date", "mo", "production"}
+    targets = {"mo", "type", "qty", "quantity", "rings", "date", "channel", "production", "weight", "item"}
     
-    # Test if current headers are already completely valid
     current_cols = [str(c).strip().lower().replace(" ", "") for c in df.columns]
     if sum(1 for t in targets if any(t in c for c in current_cols)) >= 2:
         if not any("unnamed:" in str(c).lower() for c in df.columns[:2]):
             return df
             
-    # Scan the first 10 rows to locate where the true data matrix table begins
     for idx in range(min(10, len(df))):
         row_vals = [str(val).strip().lower().replace(" ", "") for val in df.iloc[idx].dropna()]
         match_count = sum(1 for t in targets if any(t in v for v in row_vals))
@@ -49,7 +45,6 @@ def repair_sheet_headers(df):
             new_cols = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(new_cols)]
             repaired_df = df.iloc[idx+1:].copy()
             repaired_df.columns = new_cols
-            print(f"🎯 Repaired sheet matrix structure at row index {idx}. Columns: {new_cols[:5]}")
             return repaired_df.reset_index(drop=True)
             
     return df
@@ -58,7 +53,8 @@ def normalize_channel(value):
     if pd.isna(value): 
         return ""
     val_str = str(value).strip().upper()
-    for prefix in ["CH-", "CH.", "CH", "CHANNEL-", "CHANNEL"]:
+    # Uniformly strip channel/line markers to align sheet names like T3/CH03 down to '3'
+    for prefix in ["CH-", "CH.", "CH", "CHANNEL-", "CHANNEL", "T-", "T"]:
         if val_str.startswith(prefix):
             val_str = val_str[len(prefix):].strip()
     val_str = val_str.replace("-", "").replace(" ", "").strip()
@@ -110,25 +106,23 @@ def parse_date_safe(value):
     try:
         if pd.isna(value) or str(value).strip().lower() in ["nan", "nat", "", "-", "none"]:
             return None
-        
-        # Explicit check to stop NaT from leaking out as an object
         ts = pd.to_datetime(value, dayfirst=True, errors='coerce')
         if ts is pd.NaT or pd.isna(ts):
             return None
-            
         return ts.date()
     except:
         return None
 
 def load_excel_sheets(url):
     try:
+        from settings import settings
         resp = requests.get(url, timeout=30)
         if resp.status_code != 200: 
             return {}
         xls = pd.ExcelFile(io.BytesIO(resp.content))
         return {sheet: repair_sheet_headers(xls.parse(sheet)) for sheet in xls.sheet_names}
     except Exception as e:
-        print(f"⚠️ Sheet stream down on URL {url}: {str(e)}")
+        print(f"⚠️ Sheet stream down on URL: {str(e)}")
         return {}
 
 # =========================================================
@@ -140,27 +134,33 @@ def process_tbe_data():
         return
     
     IS_UPDATING = True
-    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Executing Live TBE Pipeline Data Refresh...")
+    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Executing Chronological Batching TBE Pipeline...")
 
     try:
+        from settings import settings
         ring_wt_sheets = load_excel_sheets(settings.RINGWT_TRANSITBUFFER_URL)
         channel_master_sheets = {**load_excel_sheets(settings.TRB_MASTER_URL), **load_excel_sheets(settings.DGBB_MASTER_URL)}
 
         # ---------------------------------------------------------
-        # STEP 1: COMPUTE CHANNEL QUALITIES (Max_Cum Targets)
+        # STEP 1: PARSE CHANNEL MASTER INCREMENTAL PRODUCTION RECORDS
         # ---------------------------------------------------------
-        channel_variant_maxes = {}
+        channel_production_records = []
         
         for sheet_name, df in channel_master_sheets.items():
-            if df.empty: 
+            if df.empty or sheet_name in ['Pivot Table 1', 'Pivot Table 2', 'PIC List', 'List']: 
                 continue
             
-            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "line", "mo"])
-            type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "itemdescription", "desc", "family"])
-            cum_col = find_column(df, ["cumulative", "cum", "totalproduction", "prodqty", "cumulativeproduction", "totalqty", "total"])
+            # Find the core identifiers (Excluding 'mo' to prevent misidentifying an MO number column as the channel number)
+            c_col = find_column(df, ["channel", "channelno", "channelnum", "machineno", "line"])
+            type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "itemdescription", "desc"])
             d_col = find_column(df, ["date", "day", "txndate", "timestamp"])
+            
+            # Look for incremental production column first, fallback to standard qty if needed
+            prod_col = find_column(df, ["production", "prodqty", "shiftproduction"])
+            if not prod_col:
+                prod_col = find_column(df, ["qty", "cumulative", "cum"])
 
-            if not type_col or not cum_col: 
+            if not type_col or not prod_col: 
                 continue
 
             for _, row in df.iterrows():
@@ -173,43 +173,28 @@ def process_tbe_data():
                     continue
                 
                 base_family, _ = parse_family_and_type(prod_str)
-                cumulative = clean_nan(row.get(cum_col))
+                prod_qty = clean_nan(row.get(prod_col))
                 date_val = parse_date_safe(row.get(d_col))
 
-                v_key = (ch, base_family, prod_str)
-                if v_key not in channel_variant_maxes:
-                    channel_variant_maxes[v_key] = {"max_cum": 0.0, "min_date": None, "max_date": None}
-                
-                v_meta = channel_variant_maxes[v_key]
-                if cumulative > v_meta["max_cum"]:
-                    v_meta["max_cum"] = cumulative
-                if date_val:
-                    v_meta["min_date"] = min(v_meta["min_date"], date_val) if v_meta["min_date"] else date_val
-                    v_meta["max_date"] = max(v_meta["max_date"], date_val) if v_meta["max_date"] else date_val
+                if prod_qty > 0 and date_val:
+                    channel_production_records.append({
+                        "ch": ch,
+                        "fam": base_family,
+                        "qty": prod_qty,
+                        "date": date_val
+                    })
 
-        # Roll sub-variants into family level totals linked by Channel Code
-        family_channel_totals = {}
-        for (ch, base_family, prod_str), v_meta in channel_variant_maxes.items():
-            f_key = (ch, base_family)
-            if f_key not in family_channel_totals:
-                family_channel_totals[f_key] = {"ch_qty": 0.0, "ch_in_date": None, "ch_out_date": None}
-            
-            f_meta = family_channel_totals[f_key]
-            f_meta["ch_qty"] += v_meta["max_cum"]
-            if v_meta["min_date"]:
-                f_meta["ch_in_date"] = min(f_meta["ch_in_date"], v_meta["min_date"]) if f_meta["ch_in_date"] else v_meta["min_date"]
-            if v_meta["max_date"]:
-                f_meta["ch_out_date"] = max(f_meta["ch_out_date"], v_meta["max_date"]) if f_meta["ch_out_date"] else v_meta["max_date"]
+        df_ch_prod = pd.DataFrame(channel_production_records)
 
         # ---------------------------------------------------------
         # STEP 2: PARSE TRANSIT BUFFER RING SPREADSHEETS
         # ---------------------------------------------------------
         raw_ring_data = []
         for sheet_name, df in ring_wt_sheets.items():
-            if df.empty: 
+            if df.empty or sheet_name in ['Sheet2', 'Sheet3']: 
                 continue
             
-            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "mo"])
+            c_col = find_column(df, ["channel", "channelno", "channelnum", "machineno"])
             f_col = find_column(df, ["type", "variant", "product", "item", "itemdescription", "desc", "family"])
             q_col = find_column(df, ["noofrings", "quantity", "qty", "rings", "totalqtyrecd", "recdqty", "production"])
             d_col = find_column(df, ["date", "day", "txndate", "timestamp"])
@@ -228,82 +213,117 @@ def process_tbe_data():
                 
                 base_family, r_type = parse_family_and_type(prod_text)
                 qty = clean_nan(row.get(q_col))
-                
                 dt = parse_date_safe(row.get(d_col))
-                if dt is None:
-                    dt = datetime.now().date()
 
-                if qty > 0:
+                if qty > 0 and dt:
                     raw_ring_data.append({"ch": ch, "fam": base_family, "type": r_type, "qty": qty, "date": dt})
 
         df_rings = pd.DataFrame(raw_ring_data)
         if df_rings.empty:
-            print("⚠️ Pipeline Warning: No actionable component rows extracted. Clearing cached data.")
+            print("⚠️ Pipeline Warning: No actionable components extracted from Transit Buffer.")
             MASTER_CACHE = []
             LAST_REFRESH = datetime.now()
             return
 
         # ---------------------------------------------------------
-        # STEP 3: CONSOLIDATE DATA VIA 7-DAY WAVE SCHEDULING
+        # STEP 3: SESSIONIZE BY 7-DAY INACTIVITY GAPS
         # ---------------------------------------------------------
-        df_rings = df_rings.sort_values(by=['ch', 'fam', 'type', 'date'])
-        compiled_summary = []
-
+        intermediate_batches = []
+        
         for (ch, fam, r_type), group in df_rings.groupby(['ch', 'fam', 'type']):
-            current_batch_qty = 0.0
-            batch_start = None
-            last_date = None
-
-            for _, row in group.iterrows():
-                if last_date is None or (row['date'] - last_date).days <= 7:
-                    current_batch_qty += row['qty']
-                    if batch_start is None: 
-                        batch_start = row['date']
-                    last_date = row['date']
-                else:
-                    compiled_summary.append(build_matrix_row(ch, fam, r_type, current_batch_qty, last_date, family_channel_totals))
-                    current_batch_qty = row['qty']
-                    batch_start = row['date']
-                    last_date = row['date']
+            group = group.sort_values(by='date')
             
-            if batch_start is not None:
-                compiled_summary.append(build_matrix_row(ch, fam, r_type, current_batch_qty, last_date, family_channel_totals))
+            current_batch_rows = []
+            for _, row in group.iterrows():
+                if not current_batch_rows:
+                    current_batch_rows.append(row)
+                else:
+                    last_date = current_batch_rows[-1]['date']
+                    # If gap between records is greater than 7 days, seal current batch and spin up a new row
+                    if (row['date'] - last_date).days <= 7:
+                        current_batch_rows.append(row)
+                    else:
+                        intermediate_batches.append({
+                            "ch": ch, "fam": fam, "type": r_type,
+                            "tb_qty": sum(r['qty'] for r in current_batch_rows),
+                            "start_date": current_batch_rows[0]['date'],
+                            "end_date": current_batch_rows[-1]['date']
+                        })
+                        current_batch_rows = [row]
+                        
+            if current_batch_rows:
+                intermediate_batches.append({
+                    "ch": ch, "fam": fam, "type": r_type,
+                    "tb_qty": sum(r['qty'] for r in current_batch_rows),
+                    "start_date": current_batch_rows[0]['date'],
+                    "end_date": current_batch_rows[-1]['date']
+                })
 
-        compiled_summary.sort(key=lambda x: (x["channel_ref"], x["product_variant"], x["ring_type"]))
+        # ---------------------------------------------------------
+        # STEP 4: TIME-WINDOWED MATRIX ROW COMPILATION
+        # ---------------------------------------------------------
+        compiled_summary = []
+        
+        for batch in intermediate_batches:
+            ch = batch["ch"]
+            fam = batch["fam"]
+            r_type = batch["type"]
+            tb_qty = batch["tb_qty"]
+            start_dt = batch["start_date"]
+            end_dt = batch["end_date"]
+            
+            ch_qty = 0.0
+            ch_min_date = None
+            ch_max_date = None
+            
+            # Map channel production that occurred within or closely surrounding this batch's timeframe
+            if not df_ch_prod.empty:
+                mask = (df_ch_prod["ch"] == ch) & (df_ch_prod["fam"] == fam)
+                matched_prod = df_ch_prod[mask]
+                
+                if not matched_prod.empty and start_dt and end_dt:
+                    # Capture production window allowing a tiny buffer cushion for logging latencies
+                    date_mask = (matched_prod["date"] >= (start_dt - pd.Timedelta(days=3))) & \
+                                (matched_prod["date"] <= (end_dt + pd.Timedelta(days=10)))
+                    matched_prod = matched_prod[date_mask]
+                    
+                if not matched_prod.empty:
+                    ch_qty = matched_prod["qty"].sum()
+                    ch_min_date = matched_prod["date"].min()
+                    ch_max_date = matched_prod["date"].max()
+
+            # Assign operational status fields based on specific batch window metrics
+            if tb_qty == 0 and ch_qty == 0:
+                calc_status = "Yet to Start"
+            elif ch_qty >= tb_qty and tb_qty > 0:
+                calc_status = "Completed"
+            else:
+                calc_status = "In Process"
+
+            compiled_summary.append({
+                "channel_ref": ch,
+                "product_variant": fam,
+                "ring_type": r_type,
+                "sho_qty": tb_qty, 
+                "sho_in": str(start_dt) if start_dt else "-",
+                "tb_qty": tb_qty,
+                "tb_out": str(end_dt) if end_dt else "-",
+                "ch_qty": ch_qty,
+                "ch_in": str(ch_min_date) if ch_min_date else "-",
+                "ch_out": str(ch_max_date) if ch_max_date else "-",
+                "status": calc_status
+            })
+
+        compiled_summary.sort(key=lambda x: (x["channel_ref"], x["product_variant"], x["ring_type"], x["sho_in"]))
         MASTER_CACHE = compiled_summary
         LAST_REFRESH = datetime.now()
-        print(f"✅ [TBE Pipeline Engine Complete] Successfully structured {len(MASTER_CACHE)} logistics matrix records.")
+        print(f"✅ [Engine Complete] Successfully processed {len(MASTER_CACHE)} chronological batch entries.")
 
     except Exception as e:
-        print(f"❌ CRITICAL RUNTIME EXCEPTION IN BACKGROUND PROCESSING THREAD: {str(e)}")
+        print(f"❌ CRITICAL RUNTIME EXCEPTION IN LIVE AGGREGATION: {str(e)}")
     finally:
         INITIALIZED = True 
         IS_UPDATING = False
-
-def build_matrix_row(ch, fam, r_type, total_ring_qty, final_date, family_channel_totals):
-    chan_link = family_channel_totals.get((ch, fam), {"ch_qty": 0.0, "ch_in_date": None, "ch_out_date": None})
-    ch_qty = chan_link["ch_qty"]
-
-    if total_ring_qty == 0 and ch_qty == 0:
-        calc_status = "Yet to Start"
-    elif ch_qty >= total_ring_qty and total_ring_qty > 0:
-        calc_status = "Completed"
-    else:
-        calc_status = "In Process"
-
-    return {
-        "channel_ref": ch,
-        "product_variant": fam,
-        "ring_type": r_type,
-        "sho_qty": total_ring_qty,
-        "sho_in": "-",
-        "tb_qty": total_ring_qty,
-        "tb_out": str(final_date) if final_date else "-",
-        "ch_qty": ch_qty,
-        "ch_in": str(chan_link["ch_in_date"]) if chan_link["ch_in_date"] else "-",
-        "ch_out": str(chan_link["ch_out_date"]) if chan_link["ch_out_date"] else "-",
-        "status": calc_status
-    }
 
 def background_refresh_loop():
     process_tbe_data()
