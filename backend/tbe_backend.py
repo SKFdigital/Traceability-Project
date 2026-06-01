@@ -110,14 +110,27 @@ def process_tbe_data():
         return
     
     IS_UPDATING = True
-    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Starting TBE Pipeline Processing Loop...")
+    print(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Executing Live TBE Pipeline Data Refresh...")
 
     try:
         ring_wt_sheets = load_excel_sheets(settings.RINGWT_TRANSITBUFFER_URL)
         channel_master_sheets = {**load_excel_sheets(settings.TRB_MASTER_URL), **load_excel_sheets(settings.DGBB_MASTER_URL)}
 
         # ---------------------------------------------------------
-        # STEP 1: COMPUTE CHANNEL QUALITIES (Replicating Reference Max_Cum Logic)
+        # DIAGNOSTIC LOGGING: Expose raw workbook column keys
+        # ---------------------------------------------------------
+        print("\n=== 🔍 TBE WORKBOOK SCHEMA DIAGNOSTICS ===")
+        print(f"Transit Buffer Sheets Detected: {list(ring_wt_sheets.keys())}")
+        for sheet, df in ring_wt_sheets.items():
+            print(f" -> Sheet '{sheet}': Raw Headers Found -> {list(df.columns)}")
+            
+        print(f"\nChannel Master Sheets Detected: {list(channel_master_sheets.keys())}")
+        for sheet, df in channel_master_sheets.items():
+            print(f" -> Sheet '{sheet}': Raw Headers Found -> {list(df.columns)}")
+        print("===========================================\n")
+
+        # ---------------------------------------------------------
+        # STEP 1: COMPUTE CHANNEL QUALITIES (Max_Cum Targets)
         # ---------------------------------------------------------
         channel_variant_maxes = {}
         
@@ -125,17 +138,17 @@ def process_tbe_data():
             if df.empty: 
                 continue
             
-            # Map structural components matching fuzzy patterns
-            c_col = find_column(df, ["ch", "channel"])
-            type_col = find_column(df, ["type", "variant", "bearing", "product", "item"])
-            cum_col = find_column(df, ["cumulative", "cum", "totalproduction"])
-            d_col = find_column(df, ["date", "day"])
+            # Expanded fuzzy variations mapping to tracking configurations
+            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "line"])
+            type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "itemdescription", "desc", "family"])
+            cum_col = find_column(df, ["cumulative", "cum", "totalproduction", "prodqty", "totalqty", "total", "count"])
+            d_col = find_column(df, ["date", "day", "txndate", "timestamp", "time"])
 
             if not type_col or not cum_col: 
+                print(f"⚠️ Channel Master Sheet '{sheet_name}' skipped. Missing variant/type mapping or cumulative value columns.")
                 continue
 
             for _, row in df.iterrows():
-                # Fallback: if no channel column exists, parse the tab name itself
                 ch = normalize_channel(row.get(c_col)) if c_col else normalize_channel(sheet_name)
                 if not ch: 
                     continue
@@ -181,12 +194,13 @@ def process_tbe_data():
             if df.empty: 
                 continue
             
-            c_col = find_column(df, ["ch", "channel"])
-            f_col = find_column(df, ["type", "variant", "product", "item"])
-            q_col = find_column(df, ["noofrings", "quantity", "qty", "rings"])
-            d_col = find_column(df, ["date", "day"])
+            c_col = find_column(df, ["ch", "channel", "channelno", "channelnum", "chref", "machineno", "line"])
+            f_col = find_column(df, ["type", "variant", "product", "item", "itemdescription", "desc", "family"])
+            q_col = find_column(df, ["noofrings", "quantity", "qty", "rings", "totalqtyrecd", "recdqty", "balqty", "volume"])
+            d_col = find_column(df, ["date", "day", "txndate", "timestamp", "time"])
 
             if not f_col or not q_col: 
+                print(f"⚠️ Transit Buffer Sheet '{sheet_name}' skipped. Missing item descriptions or quantity metrics.")
                 continue
 
             for _, row in df.iterrows():
@@ -201,7 +215,6 @@ def process_tbe_data():
                 base_family, r_type = parse_family_and_type(prod_text)
                 qty = clean_nan(row.get(q_col))
                 
-                # Safe date assignment avoids breaking subsequent date comparison math
                 dt = parse_date_safe(row.get(d_col))
                 if dt is None:
                     dt = datetime.now().date()
@@ -211,6 +224,7 @@ def process_tbe_data():
 
         df_rings = pd.DataFrame(raw_ring_data)
         if df_rings.empty:
+            print("⚠️ Pipeline Warning: No actionable component rows extracted. Clearing cached data.")
             MASTER_CACHE = []
             LAST_REFRESH = datetime.now()
             return
@@ -244,12 +258,11 @@ def process_tbe_data():
         compiled_summary.sort(key=lambda x: (x["channel_ref"], x["product_variant"], x["ring_type"]))
         MASTER_CACHE = compiled_summary
         LAST_REFRESH = datetime.now()
-        print(f"✅ [TBE Pipeline Engine Complete] Synced {len(MASTER_CACHE)} structural records.")
+        print(f"✅ [TBE Pipeline Engine Complete] Successfully structured {len(MASTER_CACHE)} logistics matrix records.")
 
     except Exception as e:
         print(f"❌ CRITICAL RUNTIME EXCEPTION IN BACKGROUND PROCESSING THREAD: {str(e)}")
     finally:
-        # Guarantee initialization updates so the frontend spinner kills processing states
         INITIALIZED = True 
         IS_UPDATING = False
 
