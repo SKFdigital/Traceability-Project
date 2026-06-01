@@ -133,24 +133,31 @@ def download_excel(url):
     return io.BytesIO(response.content)
 
 
-def load_excel_sheets(url):
+def load_csv_or_excel(url):
     print(f"🔄 Requesting workbook download from destination: {url}")
     try:
+        # Re-using the browser-spoofed download function
         excel_data = download_excel(url)
+        
+        # If the URL targets a raw CSV stream, process it instantly
+        if "format=csv" in url:
+            df = pd.read_csv(excel_data)
+            df.columns = [str(c).strip().lower() for c in df.columns]
+            print("✅ Raw CSV data stream parsed successfully.")
+            return {"Sheet1": df} # Wrap in dict to preserve downstream loop structure
+            
+        # Fallback for standard Excel workbooks
         xls = pd.ExcelFile(excel_data)
         sheets = {}
         for sheet in xls.sheet_names:
-            try:
-                df = pd.read_excel(xls, sheet_name=sheet)
-                df.columns = [str(c).strip().lower() for c in df.columns]
-                sheets[sheet] = df
-            except Exception as e:
-                print(f"⚠️ Error parsing sheet [{sheet}]: {str(e)}")
-        print(f"✅ Workbook parsed successfully. Found {len(sheets)} sheets.")
+            df = pd.read_excel(xls, sheet_name=sheet)
+            df.columns = [str(c).strip().lower() for c in df.columns]
+            sheets[sheet] = df
         return sheets
     except Exception as e:
         print(f"❌ CRITICAL DOWNLOAD FAILURE: {str(e)}")
         return {}
+
 
 # =========================================================
 # MAIN PROCESSING CORE LOGIC
