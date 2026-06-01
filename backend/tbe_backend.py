@@ -7,6 +7,7 @@ import time
 import warnings
 import math
 from datetime import datetime
+from collections import defaultdict
 from settings import settings
 
 router = APIRouter()
@@ -94,12 +95,18 @@ def parse_family_and_type(prod_text):
             clean = clean[:-len(sfx)]
             break
             
+    # Aggressive bearing suffix trimming to prevent 0-quantity cross-sheet mismatches
+    clean = clean.split("/")[0]  # Remove /C3, etc.
+    clean = clean.replace(" ", "").replace("-", "")
+    for sfx in ["2RS1", "2RS", "2Z", "ZZ", "RS", "Z", "C3"]:
+        if clean.endswith(sfx) and len(clean) > len(sfx):
+            clean = clean[:-len(sfx)]
+            break
+
     clean = clean.strip(" -_")
     return (clean if clean else text), component
 
 def find_column(df, patterns):
-    # FIXED: Reversing the loop prioritizes patterns over column order.
-    # It now ensures it looks for "No of Rings" across all columns before falling back to generic "qty".
     for pattern in patterns:
         for col in df.columns:
             if pattern in str(col).strip().lower():
@@ -119,50 +126,53 @@ def fix_excel_headers(df):
             return df.loc[:, ~df.columns.duplicated()]
     return df.loc[:, ~df.columns.duplicated()]
 
+def get_channel_info(channel_num, family, channel_data):
+    """Smart fallback lookup matching tool to prevent 0-quantity channel data mapping errors."""
+    # 1. Direct Match Check
+    if (channel_num, family) in channel_data:
+        return channel_data[(channel_num, family)]
+    
+    # 2. Substring/Fuzzy Variant Fallback Map Check
+    for (ch, fam), info in channel_data.items():
+        if ch == channel_num and (family in fam or fam in family):
+            return info
+            
+    # 3. Channel-wide Match Fallback Check
+    ch_records = [info for (ch, fam), info in channel_data.items() if ch == channel_num]
+    if ch_records:
+        return max(ch_records, key=lambda x: x["max_cum"])
+        
+    return {"max_cum": None, "in_date": None, "out_date": None}
+
 # =========================================================
-# NETWORK EXTRACTION (WITH BROWSER SPOOFING & TIMEOUTS)
+# NETWORK EXTRACTION
 # =========================================================
 def download_excel(url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Cache-Control": "no-cache"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    
-    print(f"🔄 Requesting download from destination: {url}")
     response = requests.get(url, headers=headers, timeout=90)
-    
     if response.status_code != 200:
-        print(f"🚨 NETWORK INTERCEPTED REQUEST! Status Code: {response.status_code}")
-        print(f"Server Response Snippet: {response.text[:300]}")
         raise Exception(f"HTTP {response.status_code}")
-        
     return io.BytesIO(response.content)
 
 def load_excel_sheets(url):
     try:
         excel_data = download_excel(url)
-        
-        # Smart detection: Parse instantly if URL targets a CSV stream
         if "output=csv" in url or "format=csv" in url:
             df = pd.read_csv(excel_data)
             df.columns = [str(c).strip().lower() for c in df.columns]
-            df = df.loc[:, ~df.columns.duplicated()]
-            print("✅ Web CSV data stream extracted successfully.")
-            return {"Sheet1": df} 
+            return {"Sheet1": df.loc[:, ~df.columns.duplicated()]} 
             
-        # Default processing for standard Excel files
         xls = pd.ExcelFile(excel_data)
         sheets = {}
         for sheet in xls.sheet_names:
             try:
                 df = pd.read_excel(xls, sheet_name=sheet)
                 df.columns = [str(c).strip().lower() for c in df.columns]
-                df = df.loc[:, ~df.columns.duplicated()]
-                sheets[sheet] = df
+                sheets[sheet] = df.loc[:, ~df.columns.duplicated()]
             except Exception as e:
                 print(f"⚠️ Error parsing sheet [{sheet}]: {str(e)}")
-        print(f"✅ Workbook parsed successfully. Found {len(sheets)} sheets.")
         return sheets
     except Exception as e:
         print(f"❌ CRITICAL DOWNLOAD FAILURE: {str(e)}")
@@ -186,15 +196,8 @@ def process_tbe_data():
         trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
         dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
-        print("\n--- DIAGNOSTIC DATA CHECK ---")
-        print(f"MO Sheets Found: {bool(mo_sheets)}")
-        print(f"Ring Wt Sheets Found: {bool(ring_wt_sheets)}")
-        print(f"TRB Sheets Found: {bool(trb_sheets)}")
-        print(f"DGBB Sheets Found: {bool(dgbb_sheets)}")
-        print("-----------------------------\n")
-
         if not ring_wt_sheets:
-            print("🚨 ABORTING TBE PARSE: ring_wt_sheets is totally missing. Pipeline cannot build anchor fields.")
+            print("🚨 ABORTING TBE PARSE: ring_wt_sheets missing.")
             INITIALIZATION_FAILED = True
             return
 
@@ -212,7 +215,8 @@ def process_tbe_data():
             
             if not ch_col or not type_col: continue
 
-            cum_col = find_column(df, ["cumulative", "cum"])
+            # Broadened mapping pattern scope to catch standard production volumes
+            cum_col = find_column(df, ["cumulative", "cum", "total", "ok", "prod", "quantity", "qty", "output"])
             date_col = find_column(df, ["date"])
 
             for _, row in df.iterrows():
@@ -232,17 +236,9 @@ def process_tbe_data():
                 if cumulative > c_meta["max_cum"]:
                     c_meta["max_cum"] = cumulative
                 
-                # FIXED: Simple Min/Max tracking for strict start and end dates (Point 6)
                 if date_val:
-                    if c_meta["in_date"]:
-                        c_meta["in_date"] = min(c_meta["in_date"], date_val) 
-                    else:
-                        c_meta["in_date"] = date_val
-                        
-                    if c_meta["out_date"]:
-                        c_meta["out_date"] = max(c_meta["out_date"], date_val)
-                    else:
-                        c_meta["out_date"] = date_val
+                    c_meta["in_date"] = min(c_meta["in_date"], date_val) if c_meta["in_date"] else date_val
+                    c_meta["out_date"] = max(c_meta["out_date"], date_val) if c_meta["out_date"] else date_val
 
         # ---------------------------------------------------------
         # 2. PARSE MASTER GROUND TRUTH MO DATA MAPS
@@ -266,26 +262,19 @@ def process_tbe_data():
                     mo_dict[family] = {"mo": mo_num, "target": target}
 
         # ---------------------------------------------------------
-        # 3. PROCESS RING WT TRANSIT BUFFER (THE STRUCTURAL BASE)
+        # 3. PROCESS RING WT TRANSIT BUFFER (WITH 7-DAY GAP CLUSTERING)
         # ---------------------------------------------------------
-        ring_wt_aggregated = {}
+        raw_transit_entries = []
         
         for sheet_name, df in ring_wt_sheets.items():
             df = fix_excel_headers(df)
             
             ch_col = find_column(df, ["ch# no", "ch#", "channel_no", "channel grouping", "channel", "chan", "ch"])
             type_col = find_column(df, ["type", "bearing family", "product", "variant", "item", "family"])
-            
-            # FIXED: "No Of Rings" is strictly prioritized, "Net Wt" has been removed as a fallback.
-            qty_col = find_column(df, ["no of rings", "quantity", "qty"])
+            qty_col = find_column(df, ["no of rings", "quantity", "qty"]) # Strictly extracts "No Of Rings"
             date_col = find_column(df, ["date", "challan"])
             
             if not ch_col or not type_col: continue
-            
-            # FIXED: Drop duplicates to stop double shift entries (Point 5)
-            # Will drop based on combinations of Channel, Type, and Date to flatten the list
-            if date_col:
-                df = df.drop_duplicates(subset=[ch_col, type_col, date_col])
             
             for _, row in df.iterrows():
                 channel_num = normalize_channel(extract_val(row, ch_col))
@@ -294,52 +283,103 @@ def process_tbe_data():
                 if not channel_num or not family or family == "UNKNOWN_FAMILY": continue
 
                 qty = clean_nan(extract_val(row, qty_col)) if qty_col else 0.0
-                date_val = parse_date_safe(extract_val(row, date_col)) if date_col else None
+                date_val = parse_date_safe(extract_val(row, date_col))
 
-                r_key = (channel_num, family, comp_type)
-                if r_key not in ring_wt_aggregated:
-                    ring_wt_aggregated[r_key] = {"qty": 0.0, "max_date": None}
-                
-                ring_wt_aggregated[r_key]["qty"] += qty
-                if date_val:
-                    if ring_wt_aggregated[r_key]["max_date"]:
-                        ring_wt_aggregated[r_key]["max_date"] = max(ring_wt_aggregated[r_key]["max_date"], date_val)
-                    else:
-                        ring_wt_aggregated[r_key]["max_date"] = date_val
+                raw_transit_entries.append({
+                    "channel_num": channel_num,
+                    "family": family,
+                    "comp_type": comp_type,
+                    "qty": qty,
+                    "date": date_val
+                })
+
+        # Group raw data by unique ring identifiers
+        grouped_raw = defaultdict(list)
+        for entry in raw_transit_entries:
+            grouped_raw[(entry["channel_num"], entry["family"], entry["comp_type"])].append(entry)
 
         # ---------------------------------------------------------
-        # 4. DATA COMPILATION STAGE
+        # 4. DATA COMPILATION STAGE WITH ROLLING TIME CLUSTERS
         # ---------------------------------------------------------
         compiled_summary = []
         
-        for (channel_num, family, comp_type), rw_data in ring_wt_aggregated.items():
-            c_key = (channel_num, family)
-            # Fetch channel info directly based on channel and family combination
-            # This automatically copies the single channel total into both IM and OM rows based on comp_type loops! (Point 4 & 7)
-            ch_info = channel_data.get(c_key, {"max_cum": None, "in_date": None, "out_date": None})
-            mo_info = mo_dict.get(family, {"mo": "", "target": 0.0})
+        for (channel_num, family, comp_type), entries in grouped_raw.items():
+            dated_entries = [e for e in entries if e["date"] is not None]
+            undated_entries = [e for e in entries if e["date"] is None]
             
-            calc_status = "In Process"
-            if ch_info["max_cum"] is not None and ch_info["max_cum"] >= rw_data["qty"] and rw_data["qty"] > 0:
-                calc_status = "Completed"
-            elif rw_data["qty"] == 0 and ch_info["max_cum"] in (None, 0):
-                calc_status = "Yet to Start"
+            clusters = []
+            if dated_entries:
+                # Chronological sort for strict timeline tracking
+                dated_entries.sort(key=lambda x: x["date"])
+                
+                current_cluster = [dated_entries[0]]
+                for e in dated_entries[1:]:
+                    # Check gap between current item and the latest grouped record
+                    gap_days = (e["date"] - current_cluster[-1]["date"]).days
+                    if gap_days <= 7:
+                        current_cluster.append(e)
+                    else:
+                        clusters.append(current_cluster)
+                        current_cluster = [e]
+                clusters.append(current_cluster)
 
-            compiled_summary.append({
-                "mo_number": mo_info["mo"],
-                "product_variant": family,
-                "target_qty": int(mo_info["target"]) if mo_info["target"] > 0 else "",
-                "ring_type": comp_type,
-                "sho_qty": rw_data["qty"] if rw_data["qty"] > 0 else "", 
-                "sho_in": "",
-                "tb_qty": rw_data["qty"] if rw_data["qty"] > 0 else "",
-                "tb_out": str(rw_data["max_date"]) if rw_data["max_date"] else "-",
-                "ch_qty": int(ch_info["max_cum"]) if ch_info["max_cum"] is not None and ch_info["max_cum"] > 0 else "",
-                "ch_in": str(ch_info["in_date"]) if ch_info["in_date"] else "-",
-                "ch_out": str(ch_info["out_date"]) if ch_info["out_date"] else "-",
-                "status": calc_status,
-                "channel_ref": channel_num
-            })
+            # Process tracked clusters as separate row entries
+            for cluster in clusters:
+                total_qty = sum(c["qty"] for c in cluster)
+                cluster_dates = [c["date"] for c in cluster]
+                min_date = min(cluster_dates)
+                max_date = max(cluster_dates)
+                
+                ch_info = get_channel_info(channel_num, family, channel_data)
+                mo_info = mo_dict.get(family, {"mo": "", "target": 0.0})
+                
+                calc_status = "In Process"
+                if ch_info["max_cum"] is not None and ch_info["max_cum"] >= total_qty and total_qty > 0:
+                    calc_status = "Completed"
+                elif total_qty == 0 and ch_info["max_cum"] in (None, 0):
+                    calc_status = "Yet to Start"
+
+                compiled_summary.append({
+                    "mo_number": mo_info["mo"],
+                    "product_variant": family,
+                    "target_qty": int(mo_info["target"]) if mo_info["target"] > 0 else "",
+                    "ring_type": comp_type,
+                    "sho_qty": total_qty if total_qty > 0 else "", 
+                    "sho_in": str(min_date) if min_date else "-",
+                    "tb_qty": total_qty if total_qty > 0 else "",
+                    "tb_out": str(max_date) if max_date else "-",
+                    "ch_qty": int(ch_info["max_cum"]) if ch_info["max_cum"] is not None and ch_info["max_cum"] > 0 else "",
+                    "ch_in": str(ch_info["in_date"]) if ch_info["in_date"] else "-",
+                    "ch_out": str(ch_info["out_date"]) if ch_info["out_date"] else "-",
+                    "status": calc_status,
+                    "channel_ref": channel_num
+                })
+
+            # Process undated rows safely so no data points are missed
+            if undated_entries:
+                total_qty = sum(u["qty"] for u in undated_entries)
+                ch_info = get_channel_info(channel_num, family, channel_data)
+                mo_info = mo_dict.get(family, {"mo": "", "target": 0.0})
+                
+                calc_status = "In Process"
+                if ch_info["max_cum"] is not None and ch_info["max_cum"] >= total_qty and total_qty > 0:
+                    calc_status = "Completed"
+
+                compiled_summary.append({
+                    "mo_number": mo_info["mo"],
+                    "product_variant": family,
+                    "target_qty": int(mo_info["target"]) if mo_info["target"] > 0 else "",
+                    "ring_type": comp_type,
+                    "sho_qty": total_qty if total_qty > 0 else "", 
+                    "sho_in": "-",
+                    "tb_qty": total_qty if total_qty > 0 else "",
+                    "tb_out": "-",
+                    "ch_qty": int(ch_info["max_cum"]) if ch_info["max_cum"] is not None and ch_info["max_cum"] > 0 else "",
+                    "ch_in": str(ch_info["in_date"]) if ch_info["in_date"] else "-",
+                    "ch_out": str(ch_info["out_date"]) if ch_info["out_date"] else "-",
+                    "status": calc_status,
+                    "channel_ref": channel_num
+                })
 
         compiled_summary.sort(key=lambda x: (x["mo_number"], x["product_variant"], x["ring_type"]))
         
