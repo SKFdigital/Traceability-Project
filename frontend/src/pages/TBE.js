@@ -11,6 +11,7 @@ const TBE = () => {
   const [loading, setLoading] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState('');
+  const [expandedRows, setExpandedRows] = useState(new Set()); // Tracks open rows
   
   const timerRef = useRef(null);
 
@@ -25,7 +26,6 @@ const TBE = () => {
     try {
       if (!isInitializing) setLoading(true);
       setError('');
-
       const res = await fetch(`${API}/tbe_all_mos`);
       if (!res.ok) throw new Error(`Server returned status code: ${res.status}`);
       
@@ -48,7 +48,16 @@ const TBE = () => {
     }
   };
 
-  // Filter Logic: Text Search + Date Range
+  const toggleRow = (key) => {
+    const newExpanded = new Set(expandedRows);
+    if (newExpanded.has(key)) {
+      newExpanded.delete(key);
+    } else {
+      newExpanded.add(key);
+    }
+    setExpandedRows(newExpanded);
+  };
+
   const filteredSummary = summaryData.filter(item => {
     const matchesSearch = 
       (item.channel_ref && String(item.channel_ref).toLowerCase().includes(search.toLowerCase())) ||
@@ -58,7 +67,6 @@ const TBE = () => {
     let matchesDate = true;
     if (startDate || endDate) {
       const dates = [item.sho_in, item.tb_out, item.ch_in, item.ch_out].filter(d => d && d !== '-');
-      
       if (dates.length === 0) {
         matchesDate = false; 
       } else {
@@ -70,50 +78,31 @@ const TBE = () => {
         });
       }
     }
-
     return matchesSearch && matchesDate;
   });
 
-  // Sort Logic: Channel -> Family -> Ring Type
   const sortedSummary = [...filteredSummary].sort((a, b) => {
-    if (a.channel_ref !== b.channel_ref) {
-      return String(a.channel_ref || '').localeCompare(String(b.channel_ref || ''));
-    }
-    if (a.product_variant !== b.product_variant) {
-      return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
-    }
+    if (a.channel_ref !== b.channel_ref) return String(a.channel_ref || '').localeCompare(String(b.channel_ref || ''));
+    if (a.product_variant !== b.product_variant) return String(a.product_variant || '').localeCompare(String(b.product_variant || ''));
     return String(a.ring_type || '').localeCompare(String(b.ring_type || ''));
   });
 
-  // Span Calculation for Channel Column
   const getChannelRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
     if (!currentRef) return 1;
     if (currentIndex > 0 && dataArray[currentIndex - 1].channel_ref === currentRef) return 0; 
     let span = 1;
-    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].channel_ref === currentRef) {
-      span++;
-    }
+    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].channel_ref === currentRef) span++;
     return span;
   };
 
-  // Span Calculation for Family and MO Columns
   const getFamilyRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
     const currentFam = dataArray[currentIndex].product_variant;
     if (!currentRef || !currentFam) return 1;
-    
-    if (currentIndex > 0 && 
-        dataArray[currentIndex - 1].channel_ref === currentRef &&
-        dataArray[currentIndex - 1].product_variant === currentFam) {
-      return 0; 
-    }
+    if (currentIndex > 0 && dataArray[currentIndex - 1].channel_ref === currentRef && dataArray[currentIndex - 1].product_variant === currentFam) return 0; 
     let span = 1;
-    while (currentIndex + span < dataArray.length && 
-           dataArray[currentIndex + span].channel_ref === currentRef &&
-           dataArray[currentIndex + span].product_variant === currentFam) {
-      span++;
-    }
+    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].channel_ref === currentRef && dataArray[currentIndex + span].product_variant === currentFam) span++;
     return span;
   };
 
@@ -126,33 +115,13 @@ const TBE = () => {
         </div>
         
         <div className="control-actions">
-          <input 
-            type="date" 
-            className="search-box" 
-            title="Start Date"
-            value={startDate} 
-            onChange={(e) => setStartDate(e.target.value)} 
-          />
+          <input type="date" className="search-box" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
           <span style={{margin: '0 5px', color: '#fff'}}>to</span>
-          <input 
-            type="date" 
-            className="search-box" 
-            title="End Date"
-            value={endDate} 
-            onChange={(e) => setEndDate(e.target.value)} 
-          />
-
+          <input type="date" className="search-box" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
           <button className="back-btn" style={{margin: '0 10px'}} onClick={fetchTBEDashboard} disabled={loading}>
             {loading ? 'Refreshing...' : '🔄 Reload'}
           </button>
-          
-          <input
-            className="search-box"
-            placeholder="Search Channel, MO, or Family..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            disabled={isInitializing}
-          />
+          <input className="search-box" placeholder="Search Channel, MO, or Family..." value={search} onChange={(e) => setSearch(e.target.value)} disabled={isInitializing}/>
         </div>
       </div>
 
@@ -198,70 +167,81 @@ const TBE = () => {
                 const channelSpan = getChannelRowSpan(sortedSummary, idx);
                 const familySpan = getFamilyRowSpan(sortedSummary, idx);
                 const uniqueKey = `${row.channel_ref || 'b'}-${row.product_variant || 'b'}-${row.ring_type || 'b'}-${idx}`;
+                const isExpanded = expandedRows.has(uniqueKey);
                 
                 return (
-                  <tr key={uniqueKey} className="data-row">
-                    {/* Channel Column */}
-                    {channelSpan > 0 && (
-                      <td rowSpan={channelSpan} className="merged-mo-cell fw-bold">
-                        {row.channel_ref || '-'}
-                      </td>
-                    )}
-                    
-                    {/* MO Column */}
-                    {familySpan > 0 && (
-                      <td rowSpan={familySpan} className="merged-mo-cell text-muted" style={{fontSize: '0.9em'}}>
-                        {row.mo_ref || '-'}
-                      </td>
-                    )}
+                  <React.Fragment key={uniqueKey}>
+                    <tr className="data-row">
+                      {channelSpan > 0 && (
+                        <td rowSpan={channelSpan} className="merged-mo-cell fw-bold">{row.channel_ref || '-'}</td>
+                      )}
+                      
+                      {familySpan > 0 && (
+                        <td rowSpan={familySpan} className="merged-mo-cell text-muted" style={{fontSize: '0.9em'}}>{row.mo_ref || '-'}</td>
+                      )}
 
-                    {/* Ring Family Column */}
-                    {familySpan > 0 && (
-                      <td rowSpan={familySpan} className="fw-bold text-primary">
-                        {row.product_variant}
+                      {familySpan > 0 && (
+                        <td rowSpan={familySpan} className="fw-bold text-primary clickable-cell" onClick={() => toggleRow(uniqueKey)} title="Click to view raw variant data">
+                          {isExpanded ? '▼ ' : '▶ '} {row.product_variant}
+                        </td>
+                      )}
+                      
+                      <td className="fw-bold">{row.ring_type}</td>
+                      <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '0'}</td>
+                      <td>{row.sho_in || '-'}</td>
+                      <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '0'}</td>
+                      <td>{row.tb_out || '-'}</td>
+                      
+                      {familySpan > 0 && (
+                        <td rowSpan={familySpan} className="merged-channel-cell fw-bold text-success">
+                          {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '0'}
+                        </td>
+                      )}
+                      {familySpan > 0 && <td rowSpan={familySpan} className="merged-channel-cell">{row.ch_in || '-'}</td>}
+                      {familySpan > 0 && <td rowSpan={familySpan} className="merged-channel-cell">{row.ch_out || '-'}</td>}
+                      
+                      <td>
+                        <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
+                          {row.status || 'In Process'}
+                        </span>
                       </td>
+                    </tr>
+                    
+                    {/* EXPANDED DETAILS TABLE */}
+                    {isExpanded && row.details && row.details.length > 0 && (
+                      <tr className="detail-row">
+                        <td colSpan="12" style={{padding: '15px', backgroundColor: '#fdfdfd'}}>
+                          <div style={{maxWidth: '800px', margin: '0 auto'}}>
+                            <h5 style={{margin: '0 0 10px 0', color: '#555'}}>Raw Variant Log for {row.product_variant} ({row.ring_type})</h5>
+                            <table className="sub-table">
+                              <thead>
+                                <tr>
+                                  <th>Raw Variant Name</th>
+                                  <th>Date</th>
+                                  <th>Exact Qty</th>
+                                  <th>MO</th>
+                                  <th>Source Sheet</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {row.details.map((det, dIdx) => (
+                                  <tr key={dIdx}>
+                                    <td>{det.variant}</td>
+                                    <td>{det.date}</td>
+                                    <td>{det.qty}</td>
+                                    <td>{det.mo}</td>
+                                    <td><span className="badge-source">{det.source}</span></td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
                     )}
-                    
-                    {/* Ring Type Column (Unique per row) */}
-                    <td className="fw-bold">{row.ring_type}</td>
-                    
-                    {/* SHO Split */}
-                    <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '0'}</td>
-                    <td>{row.sho_in || '-'}</td>
-                    
-                    {/* TB Split */}
-                    <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '0'}</td>
-                    <td>{row.tb_out || '-'}</td>
-                    
-                    {/* Channel Section (Merged by Family) */}
-                    {familySpan > 0 && (
-                      <td rowSpan={familySpan} className="merged-channel-cell fw-bold text-success">
-                        {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '0'}
-                      </td>
-                    )}
-                    {familySpan > 0 && (
-                      <td rowSpan={familySpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
-                    )}
-                    {familySpan > 0 && (
-                      <td rowSpan={familySpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
-                    )}
-                    
-                    {/* Status Tracker */}
-                    <td>
-                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
-                        {row.status || 'In Process'}
-                      </span>
-                    </td>
-                  </tr>
+                  </React.Fragment>
                 );
               })}
-              {sortedSummary.length === 0 && (
-                <tr>
-                  <td colSpan="12" className="empty-state">
-                    No records found matching the current search criteria or date range.
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
