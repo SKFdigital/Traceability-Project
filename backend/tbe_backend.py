@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 import pandas as pd
 import requests
 import io
@@ -6,8 +6,6 @@ import threading
 import time
 import re
 import math
-import concurrent.futures
-from collections import defaultdict
 from datetime import datetime
 
 router = APIRouter()
@@ -17,6 +15,13 @@ LAST_REFRESH = None
 IS_UPDATING = False
 INITIALIZED = False  
 CACHE_DURATION_MINUTES = 5
+
+# Global raw data tracking pools to feed sub-millisecond detail queries
+GLOBAL_CH_ROWS = []
+GLOBAL_TB_ROWS = []
+
+# Persistent Connection Reuse for Rapid Excel File Streaming
+HTTP_SESSION = requests.Session()
 
 def repair_sheet_headers(df):
     if df.empty: return df
@@ -50,6 +55,7 @@ def find_column(df, patterns):
 def normalize_channel(value, force_t_prefix=False):
     if pd.isna(value): return ""
     val_str = str(value).strip().upper()
+    
     is_explicit_t = val_str.startswith("T")
     val_str = re.sub(r'^(CH-|CH\.|CH|CHANNEL-|CHANNEL|SHEET-|SHEET)', '', val_str).strip()
     
@@ -62,6 +68,7 @@ def normalize_channel(value, force_t_prefix=False):
     
     cleaned = val_str.lstrip("0")
     if not cleaned: cleaned = "0"
+    
     if force_t_prefix or is_explicit_t:
         return f"T{cleaned}"
     return cleaned
@@ -84,12 +91,12 @@ def parse_family_and_type(prod_text):
         
     return base, r_type
 
-# MODIFIED: Extract exact float to prevent premature rounding discrepancies
-def clean_float(value):
+def clean_nan(value):
     if pd.isna(value): return 0.0
     val_str = str(value)
     match = re.search(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', val_str.replace(',', ''))
-    if match: return float(match.group())
+    if match: 
+        return float(match.group())
     return 0.0
 
 def parse_date_safe(value):
@@ -103,7 +110,7 @@ def parse_date_safe(value):
 
 def load_excel_sheets(url):
     try:
-        resp = requests.get(url, timeout=45)
+        resp = HTTP_SESSION.get(url, timeout=30)
         if resp.status_code != 200: return {}
         xls = pd.ExcelFile(io.BytesIO(resp.content))
         return {sheet: repair_sheet_headers(xls.parse(sheet)) for sheet in xls.sheet_names}
@@ -111,13 +118,14 @@ def load_excel_sheets(url):
         print(f"⚠️ Error reading workbook stream: {e}")
         return {}
 
-def process_master_sheets(sheets_dict, is_trb, ch_details_map):
+def process_master_sheets(sheets_dict, is_trb):
     ch_list = []
     for sheet_name, df in sheets_dict.items():
         if df.empty: continue
         
         clean_name = str(sheet_name).strip().upper()
-        if not re.match(r'^(T|CH)[-\s]*\d+', clean_name): continue
+        if not re.match(r'^(T|CH)[-\s]*\d+', clean_name):
+            continue
             
         ch_col = find_column(df, ["channelno", "channel", "machineno", "line", "ch"])
         mo_col = find_column(df, ["mo", "mono", "order", "orderno"])
@@ -127,9 +135,11 @@ def process_master_sheets(sheets_dict, is_trb, ch_details_map):
 
         if not type_col: continue 
 
-        # MODIFIED: to_dict('records') is exponentially faster than iterrows()
-        records = df.to_dict('records')
-        for row in records:
+        # Speed Up Optimization: Loop raw data dictionaries instead of pandas Dataframe indexer objects
+        target_cols = [c for c in [ch_col, mo_col, type_col, d_col, prod_col] if c]
+        df_records = df[target_cols].to_dict('records')
+        
+        for row in df_records:
             c_val = row.get(ch_col) if ch_col else sheet_name
             ch = normalize_channel(c_val, force_t_prefix=is_trb)
             if not ch or ch == "0": ch = normalize_channel(sheet_name, force_t_prefix=is_trb)
@@ -137,54 +147,39 @@ def process_master_sheets(sheets_dict, is_trb, ch_details_map):
             mo_val = str(row.get(mo_col)).strip() if mo_col else ""
             if mo_val.upper() in ["NAN", "NONE"]: mo_val = ""
             
-            prod_str = str(row.get(type_col)).strip().upper()
-            if prod_str in ["", "NAN"]: continue
+            prod_str = str(row.get(type_col)).strip()
+            if prod_str.upper() in ["", "NAN"]: continue
             
             base_family, _ = parse_family_and_type(prod_str)
-            qty = clean_float(row.get(prod_col)) if prod_col else 0.0
+            qty = clean_nan(row.get(prod_col)) if prod_col else 0.0
             dt = parse_date_safe(row.get(d_col))
 
-            ch_list.append({"ch": ch, "fam": base_family, "mo": mo_val, "qty": qty, "date": dt})
-            
-            # Map raw details for frontend modal
-            if qty > 0:
-                ch_details_map[(ch, base_family)].append({
-                    "source": "Channel Build", "variant": prod_str, "date": str(dt) if dt else "-", "qty": qty
-                })
+            ch_list.append({
+                "ch": ch, 
+                "fam": base_family, 
+                "variant": prod_str, 
+                "mo": mo_val, 
+                "qty": qty, 
+                "date": dt
+            })
     return ch_list
 
 def process_tbe_data():
-    global MASTER_CACHE, LAST_REFRESH, IS_UPDATING, INITIALIZED
+    global MASTER_CACHE, LAST_REFRESH, IS_UPDATING, INITIALIZED, GLOBAL_CH_ROWS, GLOBAL_TB_ROWS
     if IS_UPDATING: return
     IS_UPDATING = True
 
     try:
         from settings import settings
-        
-        # MODIFIED: ThreadPoolExecutor runs downloads concurrently (Huge loading speed boost)
-        urls = {
-            'ring_wt': settings.RINGWT_TRANSITBUFFER_URL,
-            'trb': settings.TRB_MASTER_URL,
-            'dgbb': settings.DGBB_MASTER_URL
-        }
-        loaded_data = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            future_to_key = {executor.submit(load_excel_sheets, url): key for key, url in urls.items()}
-            for future in concurrent.futures.as_completed(future_to_key):
-                loaded_data[future_to_key[future]] = future.result()
-
-        ring_wt_sheets = loaded_data.get('ring_wt', {})
-        trb_sheets = loaded_data.get('trb', {})
-        dgbb_sheets = loaded_data.get('dgbb', {})
-
-        tb_details_map = defaultdict(list)
-        ch_details_map = defaultdict(list)
+        ring_wt_sheets = load_excel_sheets(settings.RINGWT_TRANSITBUFFER_URL)
+        trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
+        dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
         # --- STEP 1: PARSE SOURCE CHANNELS ---
-        ch_list = process_master_sheets(trb_sheets, True, ch_details_map) + process_master_sheets(dgbb_sheets, False, ch_details_map)
+        ch_list = process_master_sheets(trb_sheets, is_trb=True) + process_master_sheets(dgbb_sheets, is_trb=False)
 
         df_ch_grouped = pd.DataFrame(ch_list).groupby(["ch", "fam"]).agg(
-            ch_qty=('qty', 'sum'), # Adding EXACT float values
+            ch_qty=('qty', 'sum'),
             ch_min_date=('date', lambda x: min([d for d in x if d is not None], default=None)),
             ch_max_date=('date', lambda x: max([d for d in x if d is not None], default=None)),
             mo_list=('mo', lambda x: ", ".join(sorted(set([i for i in x if i]))))
@@ -208,31 +203,39 @@ def process_tbe_data():
             
             if not f_col: continue 
 
-            records = df.to_dict('records')
-            for row in records:
+            target_cols = [c for c in [c_col, f_col, d_col, q_col] if c]
+            df_records = df[target_cols].to_dict('records')
+
+            for row in df_records:
                 c_val = row.get(c_col) if c_col else sheet_name
                 ch = normalize_channel(c_val, force_t_prefix=False) 
                 if not ch or ch == "0": ch = normalize_channel(sheet_name, force_t_prefix=False)
                 
-                prod_text = str(row.get(f_col)).strip().upper()
-                if prod_text in ["", "NAN"]: continue
+                prod_text = str(row.get(f_col)).strip()
+                if prod_text.upper() in ["", "NAN"]: continue
                 
                 base_family, r_type = parse_family_and_type(prod_text)
-                qty = clean_float(row.get(q_col)) if q_col else 0.0
+                qty = clean_nan(row.get(q_col)) if q_col else 0.0
                 dt = parse_date_safe(row.get(d_col))
 
-                tb_list.append({"ch": ch, "fam": base_family, "type": r_type, "qty": qty, "date": dt})
-                
-                if qty > 0:
-                    tb_details_map[(ch, base_family, r_type)].append({
-                        "source": "Transit Buffer (SHO)", "variant": prod_text, "date": str(dt) if dt else "-", "qty": qty
-                    })
+                tb_list.append({
+                    "ch": ch, 
+                    "fam": base_family, 
+                    "variant": prod_text, 
+                    "type": r_type, 
+                    "qty": qty, 
+                    "date": dt
+                })
 
         df_tb_grouped = pd.DataFrame(tb_list).groupby(["ch", "fam", "type"]).agg(
             tb_qty=('qty', 'sum'),
             tb_min_date=('date', lambda x: min([d for d in x if d is not None], default=None)),
             tb_max_date=('date', lambda x: max([d for d in x if d is not None], default=None))
         ).reset_index() if tb_list else pd.DataFrame(columns=["ch", "fam", "type", "tb_qty", "tb_min_date", "tb_max_date"])
+
+        # Cache reference data for detail inquiries
+        GLOBAL_CH_ROWS = ch_list
+        GLOBAL_TB_ROWS = tb_list
 
         # --- STEP 3: MATRIX RELATIONSHIP MERGE ---
         if df_tb_grouped.empty and df_ch_grouped.empty:
@@ -241,48 +244,43 @@ def process_tbe_data():
             return
 
         merged = pd.merge(df_tb_grouped, df_ch_grouped, on=["ch", "fam"], how="outer")
-        merged['tb_qty'] = merged['tb_qty'].fillna(0.0)
-        merged['ch_qty'] = merged['ch_qty'].fillna(0.0)
         
         compiled_summary = []
-        for row in merged.to_dict('records'):
+        for _, row in merged.iterrows():
             ch, fam = row["ch"], row["fam"]
             r_type = row.get("type") if pd.notna(row.get("type")) else "ASSEMBLY"
             
-            # MODIFIED: Apply round up ONLY after grouping math is totally finished
-            tb_qty = math.ceil(row["tb_qty"])
-            ch_qty = math.ceil(row["ch_qty"])
+            tb_qty = row.get("tb_qty", 0.0)
+            ch_qty = row.get("ch_qty", 0.0)
+            if pd.isna(tb_qty): tb_qty = 0.0
+            if pd.isna(ch_qty): ch_qty = 0.0
 
             tb_min, tb_max = row.get("tb_min_date"), row.get("tb_max_date")
             ch_min, ch_max = row.get("ch_min_date"), row.get("ch_max_date")
             mo_list = row.get("mo_list", "")
 
-            if tb_qty == 0 and ch_qty > 0: calc_status = "Channel Only"
-            elif tb_qty > 0 and ch_qty == 0: calc_status = "Missing Channel Data"
-            elif ch_qty >= tb_qty and tb_qty > 0: calc_status = "Completed"
-            else: calc_status = "In Process"
+            # Requirement 1: Apply math.ceil globally AFTER aggregating everything up
+            final_tb_qty = math.ceil(tb_qty)
+            final_ch_qty = math.ceil(ch_qty)
 
-            # Compile Raw Detail rows mapped to this specific combination
-            combined_details = []
-            if (ch, fam, r_type) in tb_details_map:
-                combined_details.extend(tb_details_map[(ch, fam, r_type)])
-            if (ch, fam) in ch_details_map:
-                combined_details.extend(ch_details_map[(ch, fam)])
+            if final_tb_qty == 0 and final_ch_qty > 0: calc_status = "Channel Only"
+            elif final_tb_qty > 0 and final_ch_qty == 0: calc_status = "Missing Channel Data"
+            elif final_ch_qty >= final_tb_qty and final_tb_qty > 0: calc_status = "Completed"
+            else: calc_status = "In Process"
 
             compiled_summary.append({
                 "channel_ref": ch,
                 "mo_ref": mo_list if pd.notna(mo_list) else "",
                 "product_variant": fam,
                 "ring_type": r_type,
-                "sho_qty": tb_qty, 
+                "sho_qty": final_tb_qty, 
                 "sho_in": str(tb_min) if pd.notna(tb_min) and tb_min else "-",
-                "tb_qty": tb_qty,
+                "tb_qty": final_tb_qty,
                 "tb_out": str(tb_max) if pd.notna(tb_max) and tb_max else "-",
-                "ch_qty": ch_qty,
+                "ch_qty": final_ch_qty,
                 "ch_in": str(ch_min) if pd.notna(ch_min) and ch_min else "-",
                 "ch_out": str(ch_max) if pd.notna(ch_max) and ch_max else "-",
-                "status": calc_status,
-                "details": sorted(combined_details, key=lambda x: (x["date"] == "-", x["date"]))
+                "status": calc_status
             })
 
         compiled_summary.sort(key=lambda x: (x["channel_ref"], x["product_variant"], x["ring_type"]))
@@ -308,3 +306,50 @@ def get_tbe_dashboard():
     if not INITIALIZED:
         return {"status": "initializing", "message": "Compiling data matrices...", "data": []}
     return {"status": "success", "last_updated": str(LAST_REFRESH), "data": MASTER_CACHE}
+
+@router.get("/tbe_variant_details")
+def get_tbe_variant_details(ch: str = Query(...), fam: str = Query(...)):
+    """
+    Requirement 2 & 4: Variant breakdown view. Sums quantities per unique variant,
+    disregarding hyphens and spacing mutations during aggregation.
+    """
+    ch_filtered = [r for r in GLOBAL_CH_ROWS if r["ch"] == ch and r["fam"] == fam]
+    tb_filtered = [r for r in GLOBAL_TB_ROWS if r["ch"] == ch and r["fam"] == fam]
+    
+    variants_map = {}
+    
+    # Process SHO & Transit Buffer entries (sharing raw input reference)
+    for r in tb_filtered:
+        raw_v = r["variant"]
+        norm_key = str(raw_v).upper().replace("-", "").replace(" ", "")
+        if not norm_key: continue
+        
+        if norm_key not in variants_map:
+            variants_map[norm_key] = {"variant_label": raw_v, "sho_qty": 0.0, "tb_qty": 0.0, "ch_qty": 0.0}
+        
+        variants_map[norm_key]["sho_qty"] += r["qty"]
+        variants_map[norm_key]["tb_qty"] += r["qty"]
+
+    # Process Channel section entries
+    for r in ch_filtered:
+        raw_v = r["variant"]
+        norm_key = str(raw_v).upper().replace("-", "").replace(" ", "")
+        if not norm_key: continue
+        
+        if norm_key not in variants_map:
+            variants_map[norm_key] = {"variant_label": raw_v, "sho_qty": 0.0, "tb_qty": 0.0, "ch_qty": 0.0}
+            
+        variants_map[norm_key]["ch_qty"] += r["qty"]
+
+    # Compile and apply math.ceil onto total sums
+    results = []
+    for norm_key, data in variants_map.items():
+        results.append({
+            "variant": data["variant_label"],
+            "sho_qty": math.ceil(data["sho_qty"]),
+            "tb_qty": math.ceil(data["tb_qty"]),
+            "ch_qty": math.ceil(data["ch_qty"])
+        })
+        
+    results.sort(key=lambda x: x["variant"])
+    return {"status": "success", "data": results}
