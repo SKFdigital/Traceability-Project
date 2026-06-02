@@ -13,7 +13,7 @@ const TBE = () => {
   const [error, setError] = useState('');
   
   // Drilldown Breakout States
-  const [selectedFamily, setSelectedFamily] = useState(null); // format: { ch, fam }
+  const [selectedFamily, setSelectedFamily] = useState(null); 
   const [detailData, setDetailData] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
 
@@ -26,7 +26,6 @@ const TBE = () => {
     };
   }, []);
 
-  // Fetch variant breakdown metrics whenever a Ring Family cell is triggered
   useEffect(() => {
     if (!selectedFamily) {
       setDetailData([]);
@@ -38,7 +37,7 @@ const TBE = () => {
         setDetailLoading(true);
         const url = `${API}/tbe_variant_details?ch=${encodeURIComponent(selectedFamily.ch)}&fam=${encodeURIComponent(selectedFamily.fam)}`;
         const res = await fetch(url);
-        if (!res.ok) throw new Error("Could not retrieve variant logs.");
+        if (!res.ok) throw new Error("Could not retrieve variant sequential logs.");
         const json = await res.json();
         setDetailData(json.data || []);
       } catch (err) {
@@ -78,7 +77,6 @@ const TBE = () => {
     }
   };
 
-  // Filter Logic: Text Search + Date Range
   const filteredSummary = summaryData.filter(item => {
     const matchesSearch = 
       (item.channel_ref && String(item.channel_ref).toLowerCase().includes(search.toLowerCase())) ||
@@ -104,7 +102,6 @@ const TBE = () => {
     return matchesSearch && matchesDate;
   });
 
-  // Sort Logic: Channel -> Family -> Ring Type
   const sortedSummary = [...filteredSummary].sort((a, b) => {
     if (a.channel_ref !== b.channel_ref) {
       return String(a.channel_ref || '').localeCompare(String(b.channel_ref || ''));
@@ -115,7 +112,6 @@ const TBE = () => {
     return String(a.ring_type || '').localeCompare(String(b.ring_type || ''));
   });
 
-  // Span Calculation for Channel Column
   const getChannelRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
     if (!currentRef) return 1;
@@ -127,7 +123,6 @@ const TBE = () => {
     return span;
   };
 
-  // Span Calculation for Family and MO Columns
   const getFamilyRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
     const currentFam = dataArray[currentIndex].product_variant;
@@ -245,12 +240,12 @@ const TBE = () => {
                       </td>
                     )}
 
-                    {/* Ring Family Column - Interactive Cell Hook */}
+                    {/* Ring Family Column - Interactive Drilldown Component */}
                     {familySpan > 0 && (
                       <td 
                         rowSpan={familySpan} 
                         className="fw-bold text-primary clickable-family-cell"
-                        title="Click to view variant breakdown table"
+                        title="Click to view full variant routing entries"
                         onClick={() => setSelectedFamily({ ch: row.channel_ref, fam: row.product_variant })}
                       >
                         {row.product_variant}
@@ -302,14 +297,14 @@ const TBE = () => {
         </div>
       )}
 
-      {/* Drilldown Sub-Variant Modal Component Area */}
+      {/* Redesigned Stacked Layout Detail Breakdown Modal */}
       {selectedFamily && (
         <div className="modal-overlay" onClick={() => setSelectedFamily(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h3>Variant Breakdown Matrix</h3>
-                <p className="modal-subheading">Family Group: <strong>{selectedFamily.fam}</strong> | Channel: <strong>{selectedFamily.ch}</strong></p>
+                <h3>Variant Specific Location Breakdown</h3>
+                <p className="modal-subheading">Family Scope: <strong>{selectedFamily.fam}</strong></p>
               </div>
               <button className="close-modal-btn" onClick={() => setSelectedFamily(null)}>&times;</button>
             </div>
@@ -320,25 +315,37 @@ const TBE = () => {
                   <p>Querying breakdown registries...</p>
                 </div>
               ) : detailData.length === 0 ? (
-                <div className="empty-state">No independent component logs identified for this variant string.</div>
+                <div className="empty-state">No independent deployment logs located for this variant structure.</div>
               ) : (
                 <div className="modal-table-wrapper">
                   <table className="detail-variant-table">
                     <thead>
                       <tr>
-                        <th style={{textAlign: 'left'}}>Variant Specification Name</th>
-                        <th>SHO Qty</th>
-                        <th>Transit Buffer Qty</th>
-                        <th>Channel Section Qty</th>
+                        <th style={{textAlign: 'left'}}>MO / Channel Reference</th>
+                        <th style={{textAlign: 'left'}}>Department / Specific Location</th>
+                        <th style={{textAlign: 'left'}}>Product / Part Sub Variant</th>
+                        <th>In Date</th>
+                        <th>Out Date</th>
+                        <th>Qty</th>
+                        <th>Execution Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {detailData.map((vRow, vIdx) => (
-                        <tr key={vIdx}>
-                          <td className="text-start fw-bold" style={{color: '#1e293b'}}>{vRow.variant}</td>
-                          <td>{Number(vRow.sho_qty).toLocaleString()}</td>
-                          <td>{Number(vRow.tb_qty).toLocaleString()}</td>
-                          <td className="text-success fw-bold">{Number(vRow.ch_qty).toLocaleString()}</td>
+                        <tr key={vIdx} className="modal-data-row">
+                          <td className="text-start text-muted" style={{fontSize: '0.95em'}}>{vRow.mo_ref}</td>
+                          <td className="text-start">
+                            <span className={`dept-tag ${vRow.department.toLowerCase().replace(/\s+/g, '-')}`}>
+                              {vRow.department}
+                            </span>
+                          </td>
+                          <td className="text-start fw-bold" style={{color: '#0f172a'}}>{vRow.variant}</td>
+                          <td>{vRow.in_date}</td>
+                          <td>{vRow.out_date}</td>
+                          <td className="fw-bold">{Number(vRow.qty).toLocaleString()}</td>
+                          <td>
+                            <span className="execution-status-dot">{vRow.status}</span>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
