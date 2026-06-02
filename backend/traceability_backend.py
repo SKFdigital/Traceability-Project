@@ -96,7 +96,7 @@ def process_traceability_data():
                     "base_prod": base_prod, "qty_req": qty_req
                 })
 
-                # EXACT FIX: Group strictly by MO and Base Product (Family) - NO splitting by component
+                # Group strictly by MO and Base Product (Family) - NO component splitting
                 sum_key = (mo_group, base_prod)
                 if sum_key not in summary_aggregation:
                     summary_aggregation[sum_key] = {
@@ -158,7 +158,6 @@ def process_traceability_data():
 
                 sum_key = (mo_group, base_prod)
                 if sum_key in summary_aggregation:
-                    # Using cumulative max approach for Family roll-up
                     if ch_qty > summary_aggregation[sum_key]["ch_qty"]:
                         summary_aggregation[sum_key]["ch_qty"] = ch_qty
                     if ch_date: summary_aggregation[sum_key]["ch_date"] = ch_date
@@ -191,13 +190,15 @@ def process_traceability_data():
     finally:
         IS_UPDATING = False
 
-threading.Thread(target=background_refresh_loop, daemon=True).start()
-
+# Defined BEFORE calling inside thread registration block to avoid execution NameError bugs
 def background_refresh_loop():
     process_traceability_data()
     while True:
         time.sleep(CACHE_DURATION_MINUTES * 60)
         process_traceability_data()
+
+# Starts engine execution thread pool safely
+threading.Thread(target=background_refresh_loop, daemon=True).start()
 
 @router.get("/traceability_all_mos")
 def get_all_mos():
@@ -208,14 +209,12 @@ def get_all_mos():
 @router.get("/traceability_report/{mo}")
 def get_traceability_flow(mo: str):
     """
-    EXACT FIX: Maps the drilldown directly matching TBE format.
-    Shows the breakdown of EXACT Final Variants belonging to this MO Group.
+    Maps the breakdown of detailed variants belonging to this MO Group.
     """
     search_group = get_mo_group(clean_mo(mo))
-    
     variant_map = {}
 
-    # Map Target Quantities
+    # Target Quantities
     for r in GLOBAL_RAW_RECORDS["mo_data"]:
         if r["mo_group"] == search_group:
             v = r["variant"]
@@ -223,7 +222,7 @@ def get_traceability_flow(mo: str):
                 variant_map[v] = {"variant": v, "qty_req": 0, "sho_qty": 0, "sho_date": "-", "tb_qty": 0, "tb_date": "-", "ch_qty": 0, "ch_date": "-"}
             variant_map[v]["qty_req"] += r["qty_req"]
 
-    # Map JobWork (SHO & TB) Quantities
+    # JobWork (SHO & TB) Quantities
     for r in GLOBAL_RAW_RECORDS["jw_data"]:
         if r["mo_group"] == search_group:
             v = r["variant"]
@@ -234,7 +233,7 @@ def get_traceability_flow(mo: str):
             if r["sho_date"]: variant_map[v]["sho_date"] = str(r["sho_date"])
             if r["tb_date"]: variant_map[v]["tb_date"] = str(r["tb_date"])
 
-    # Map Channel Quantities
+    # Channel Quantities
     for r in GLOBAL_RAW_RECORDS["ch_data"]:
         if r["mo_group"] == search_group:
             v = r["variant"]
