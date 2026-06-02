@@ -17,23 +17,33 @@ CACHE_DURATION_MINUTES = 5
 
 def repair_sheet_headers(df):
     if df.empty: return df
-    targets = {"mo", "ch", "type", "qty", "quantity", "rings", "date", "channel", "production", "weight", "item", "line", "part", "model", "brg", "desc"}
-    current_cols = [str(c).strip().lower().replace(" ", "") for c in df.columns]
     
-    if sum(1 for t in targets if any(t in c for c in current_cols)) >= 2:
-        if not any("unnamed:" in str(c).lower() for c in df.columns[:2]):
-            return df
-            
-    for idx in range(min(15, len(df))): 
-        row_vals = [str(val).strip().lower().replace(" ", "") for val in df.iloc[idx].dropna()]
-        match_count = sum(1 for t in targets if any(t in v for v in row_vals))
+    # We look for normalized keywords. Removing spaces and symbols to make it bulletproof.
+    targets = {"ch", "chno", "type", "noofrings", "date", "netwt", "ringwt", "qty", "quantity"}
+    
+    best_row_idx = -1
+    max_score = 0
+    
+    # Deep scan the first 20 rows to bypass massive banners like "DDM AUTO to Industrial..."
+    for idx in range(min(20, len(df))):
+        # Convert row to a list of strings, forced to lowercase, no spaces or hashes
+        row_vals = [str(val).strip().lower().replace(" ", "").replace("#", "") for val in df.iloc[idx].values]
         
-        if match_count >= 2:
-            new_cols = df.iloc[idx].tolist()
-            new_cols = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(new_cols)]
-            repaired_df = df.iloc[idx+1:].copy()
-            repaired_df.columns = new_cols
-            return repaired_df.reset_index(drop=True)
+        # Check how many of our target keywords exist in this row
+        score = sum(1 for t in targets if any(t in v for v in row_vals))
+        
+        if score > max_score:
+            max_score = score
+            best_row_idx = idx
+            
+    # If we found a row with at least 2 real column headers, lock onto it
+    if max_score >= 2 and best_row_idx >= 0:
+        new_cols = df.iloc[best_row_idx].tolist()
+        new_cols = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(new_cols)]
+        df.columns = new_cols
+        # Return the data starting from the row underneath the newly locked headers
+        return df.iloc[best_row_idx+1:].reset_index(drop=True)
+        
     return df
 
 def find_column(df, patterns):
@@ -70,11 +80,16 @@ def parse_family(prod_text):
     if match: return match.group(1)
     return text.split()[0].split('-')[0]
 
-# Extracts Family AND Ring Type (used for SHO/Transit Buffer)
+# Extracts Family AND Ring Type (used to isolate IM vs OM)
 def parse_family_and_type(prod_text):
     text = str(prod_text).strip().upper()
     if not text or text in ["NAN", "NONE", ""]: return "UNKNOWN", "ASSEMBLY"
-    r_type = "IM" if any(x in text for x in ["IM", "IR"]) else ("OM" if any(x in text for x in ["OM", "OR"]) else "ASSEMBLY")
+    
+    # Aggressively identify IM or OM
+    r_type = "ASSEMBLY"
+    if any(x in text for x in ["IM", "IR"]): r_type = "IM"
+    elif any(x in text for x in ["OM", "OR"]): r_type = "OM"
+    
     base_family = parse_family(text)
     return base_family, r_type
 
@@ -139,7 +154,6 @@ def process_tbe_data():
 
                 ch_list.append({"ch": ch, "fam": base_family, "qty": qty, "date": dt})
 
-        # Group purely by Channel and Family
         df_ch_grouped = pd.DataFrame(ch_list).groupby(["ch", "fam"]).agg(
             ch_qty=('qty', 'sum'),
             ch_min_date=('date', lambda x: min([d for d in x if d is not None], default=None)),
@@ -151,9 +165,10 @@ def process_tbe_data():
         for sheet_name, df in ring_wt_sheets.items():
             if df.empty: continue
             
-            c_col = find_column(df, ["channelref", "channel", "channelno", "machineno", "mo", "line", "ch", "machine"])
-            f_col = find_column(df, ["ringfamily", "family", "type", "variant", "product", "item", "desc", "description", "part", "model", "brg", "bearing", "component", "size"])
-            q_col = find_column(df, ["qty", "quantity", "noofrings", "rings", "totalqtyrecd", "recdqty", "total", "count", "amount", "nos"])
+            # EXACT column mapping based on your image
+            c_col = find_column(df, ["ch#no", "ch# no", "channelref", "channel", "channelno", "machineno", "mo", "line", "ch", "machine"])
+            f_col = find_column(df, ["type", "ringfamily", "family", "variant", "product", "item", "desc", "description", "part", "model", "brg"])
+            q_col = find_column(df, ["noofrings", "no of rings", "qty", "quantity", "rings", "totalqtyrecd", "recdqty", "total", "count"])
             d_col = find_column(df, ["date", "indate", "outdate", "day", "txndate", "dispatchdate"])
 
             if not f_col: continue 
@@ -171,20 +186,20 @@ def process_tbe_data():
 
                 tb_list.append({"ch": ch, "fam": base_family, "type": r_type, "qty": qty, "date": dt})
 
-        # Group by Channel, Family, AND Type (preserves IM vs OM rows)
+        # Grouping by Type ensures all IMs sum together, and all OMs sum together as distinct rows
         df_tb_grouped = pd.DataFrame(tb_list).groupby(["ch", "fam", "type"]).agg(
             tb_qty=('qty', 'sum'),
             tb_min_date=('date', lambda x: min([d for d in x if d is not None], default=None)),
             tb_max_date=('date', lambda x: max([d for d in x if d is not None], default=None))
         ).reset_index() if tb_list else pd.DataFrame(columns=["ch", "fam", "type", "tb_qty", "tb_min_date", "tb_max_date"])
 
-        # --- STEP 3: MERGE (Broadcast Channel Data to IM and OM) ---
+        # --- STEP 3: MERGE ---
         if df_tb_grouped.empty and df_ch_grouped.empty:
             MASTER_CACHE = []
             LAST_REFRESH = datetime.now()
             return
 
-        # Merging purely on Channel and Family. This forces the Channel data to map to BOTH the IM and OM rows.
+        # Matches on Channel and Family to broadcast Channel data across both IM and OM rows
         merged = pd.merge(df_tb_grouped, df_ch_grouped, on=["ch", "fam"], how="outer")
         
         compiled_summary = []
