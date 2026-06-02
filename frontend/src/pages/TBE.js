@@ -6,6 +6,8 @@ const API = 'https://scm-backend-pshv.onrender.com';
 const TBE = () => {
   const [summaryData, setSummaryData] = useState([]);
   const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState('');
@@ -25,7 +27,7 @@ const TBE = () => {
       setError('');
 
       const res = await fetch(`${API}/tbe_all_mos`);
-      if (!res.ok) throw new Error(`Server returned status code: ${res.status}. Check API deployment.`);
+      if (!res.ok) throw new Error(`Server returned status code: ${res.status}`);
       
       const json = await res.json();
       
@@ -46,10 +48,30 @@ const TBE = () => {
     }
   };
 
-  const filteredSummary = summaryData.filter(item => 
-    (item.channel_ref && String(item.channel_ref).toLowerCase().includes(search.toLowerCase())) ||
-    (item.product_variant && String(item.product_variant).toLowerCase().includes(search.toLowerCase()))
-  );
+  // Filter Logic: Text Search + Date Range
+  const filteredSummary = summaryData.filter(item => {
+    const matchesSearch = 
+      (item.channel_ref && String(item.channel_ref).toLowerCase().includes(search.toLowerCase())) ||
+      (item.product_variant && String(item.product_variant).toLowerCase().includes(search.toLowerCase()));
+
+    let matchesDate = true;
+    if (startDate || endDate) {
+      const dates = [item.sho_in, item.tb_out, item.ch_in, item.ch_out].filter(d => d && d !== '-');
+      
+      if (dates.length === 0) {
+        matchesDate = false; 
+      } else {
+        matchesDate = dates.some(d => {
+          const dateObj = new Date(d);
+          const s = startDate ? new Date(startDate) : new Date('1900-01-01');
+          const e = endDate ? new Date(endDate) : new Date('2100-01-01');
+          return dateObj >= s && dateObj <= e;
+        });
+      }
+    }
+
+    return matchesSearch && matchesDate;
+  });
 
   const sortedSummary = [...filteredSummary].sort((a, b) => {
     if (a.channel_ref !== b.channel_ref) {
@@ -61,7 +83,6 @@ const TBE = () => {
     return String(a.ring_type || '').localeCompare(String(b.ring_type || ''));
   });
 
-  // Merges the Channel Name block vertically
   const getChannelRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
     if (!currentRef) return 1;
@@ -73,7 +94,6 @@ const TBE = () => {
     return span;
   };
 
-  // Merges the Channel Production columns vertically for IM/OM sharing the same family
   const getFamilyRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
     const currentFam = dataArray[currentIndex].product_variant;
@@ -82,7 +102,7 @@ const TBE = () => {
     if (currentIndex > 0 && 
         dataArray[currentIndex - 1].channel_ref === currentRef &&
         dataArray[currentIndex - 1].product_variant === currentFam) {
-      return 0; // Hide this cell, it will be merged into the cell above it
+      return 0; 
     }
     let span = 1;
     while (currentIndex + span < dataArray.length && 
@@ -102,9 +122,26 @@ const TBE = () => {
         </div>
         
         <div className="control-actions">
-          <button className="back-btn" style={{marginRight: '10px'}} onClick={fetchTBEDashboard} disabled={loading}>
-            {loading ? 'Refreshing...' : '🔄 Force Reload'}
+          <input 
+            type="date" 
+            className="search-box" 
+            title="Start Date"
+            value={startDate} 
+            onChange={(e) => setStartDate(e.target.value)} 
+          />
+          <span style={{margin: '0 5px', color: '#fff'}}>to</span>
+          <input 
+            type="date" 
+            className="search-box" 
+            title="End Date"
+            value={endDate} 
+            onChange={(e) => setEndDate(e.target.value)} 
+          />
+
+          <button className="back-btn" style={{margin: '0 10px'}} onClick={fetchTBEDashboard} disabled={loading}>
+            {loading ? 'Refreshing...' : '🔄 Reload'}
           </button>
+          
           <input
             className="search-box"
             placeholder="Search Channel or Ring Family..."
@@ -115,13 +152,12 @@ const TBE = () => {
         </div>
       </div>
 
-      {error && <div className="error-box">⚠️ Network Fault Pipeline Blockage: {error}</div>}
+      {error && <div className="error-box">⚠️ Network Error: {error}</div>}
       
       {isInitializing && (
         <div className="initializing-box">
           <div className="spinner"></div>
           <p><strong>Compiling Remote Workbook Matrix Caches...</strong></p>
-          <p className="sub-text">Normalizing fuzzy column variants, scanning tab titles, and parsing windows...</p>
         </div>
       )}
 
@@ -160,21 +196,17 @@ const TBE = () => {
                 
                 return (
                   <tr key={uniqueKey} className="data-row">
-                    {/* Merged Channel Name */}
                     {channelSpan > 0 && (
                       <td rowSpan={channelSpan} className="merged-mo-cell fw-bold">
                         {row.channel_ref || '-'}
                       </td>
                     )}
-
-                    {/* Merged Family Name */}
                     {familySpan > 0 && (
                       <td rowSpan={familySpan} className="fw-bold text-primary">
                         {row.product_variant}
                       </td>
                     )}
                     
-                    {/* Split IM/OM rows */}
                     <td className="fw-bold">{row.ring_type}</td>
                     
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '0'}</td>
@@ -183,7 +215,6 @@ const TBE = () => {
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '0'}</td>
                     <td>{row.tb_out || '-'}</td>
                     
-                    {/* Rolled up Channel columns spanning across the IM/OM rows */}
                     {familySpan > 0 && (
                       <td rowSpan={familySpan} className="merged-channel-cell fw-bold text-success">
                         {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '0'}
@@ -196,7 +227,6 @@ const TBE = () => {
                       <td rowSpan={familySpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
                     )}
                     
-                    {/* Status Tracker is independent per IM/OM line so you can see if only one is complete */}
                     <td>
                       <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
                         {row.status || 'In Process'}
@@ -208,7 +238,7 @@ const TBE = () => {
               {sortedSummary.length === 0 && (
                 <tr>
                   <td colSpan="11" className="empty-state">
-                    No active spreadsheet records parsed matching the required structural properties.
+                    No records found matching the current search criteria or date range.
                   </td>
                 </tr>
               )}
