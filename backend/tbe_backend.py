@@ -16,11 +16,9 @@ IS_UPDATING = False
 INITIALIZED = False  
 CACHE_DURATION_MINUTES = 5
 
-# Global raw data tracking pools to feed sub-millisecond detail queries
 GLOBAL_CH_ROWS = []
 GLOBAL_TB_ROWS = []
 
-# Persistent Connection Reuse for Rapid Excel File Streaming
 HTTP_SESSION = requests.Session()
 
 def repair_sheet_headers(df):
@@ -135,7 +133,6 @@ def process_master_sheets(sheets_dict, is_trb):
 
         if not type_col: continue 
 
-        # Speed Up Optimization: Loop raw data dictionaries instead of pandas Dataframe indexer objects
         target_cols = [c for c in [ch_col, mo_col, type_col, d_col, prod_col] if c]
         df_records = df[target_cols].to_dict('records')
         
@@ -175,7 +172,6 @@ def process_tbe_data():
         trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
         dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
-        # --- STEP 1: PARSE SOURCE CHANNELS ---
         ch_list = process_master_sheets(trb_sheets, is_trb=True) + process_master_sheets(dgbb_sheets, is_trb=False)
 
         df_ch_grouped = pd.DataFrame(ch_list).groupby(["ch", "fam"]).agg(
@@ -185,7 +181,6 @@ def process_tbe_data():
             mo_list=('mo', lambda x: ", ".join(sorted(set([i for i in x if i]))))
         ).reset_index() if ch_list else pd.DataFrame(columns=["ch", "fam", "ch_qty", "ch_min_date", "ch_max_date", "mo_list"])
 
-        # --- STEP 2: PARSE TRANSIT BUFFER DEPENDENCIES ---
         tb_list = []
         for sheet_name, df in ring_wt_sheets.items():
             if df.empty: continue
@@ -233,11 +228,9 @@ def process_tbe_data():
             tb_max_date=('date', lambda x: max([d for d in x if d is not None], default=None))
         ).reset_index() if tb_list else pd.DataFrame(columns=["ch", "fam", "type", "tb_qty", "tb_min_date", "tb_max_date"])
 
-        # Cache reference data for detail inquiries
         GLOBAL_CH_ROWS = ch_list
         GLOBAL_TB_ROWS = tb_list
 
-        # --- STEP 3: MATRIX RELATIONSHIP MERGE ---
         if df_tb_grouped.empty and df_ch_grouped.empty:
             MASTER_CACHE = []
             LAST_REFRESH = datetime.now()
@@ -259,7 +252,7 @@ def process_tbe_data():
             ch_min, ch_max = row.get("ch_min_date"), row.get("ch_max_date")
             mo_list = row.get("mo_list", "")
 
-            # Requirement 1: Apply math.ceil globally AFTER aggregating everything up
+            # Precise addition first, round up once at the end
             final_tb_qty = math.ceil(tb_qty)
             final_ch_qty = math.ceil(ch_qty)
 
@@ -275,7 +268,6 @@ def process_tbe_data():
                 "ring_type": r_type,
                 "sho_qty": final_tb_qty, 
                 "sho_in": str(tb_min) if pd.notna(tb_min) and tb_min else "-",
-                "tb_qty": final_tb_qty,
                 "tb_out": str(tb_max) if pd.notna(tb_max) and tb_max else "-",
                 "ch_qty": final_ch_qty,
                 "ch_in": str(ch_min) if pd.notna(ch_min) and ch_min else "-",
@@ -310,46 +302,96 @@ def get_tbe_dashboard():
 @router.get("/tbe_variant_details")
 def get_tbe_variant_details(ch: str = Query(...), fam: str = Query(...)):
     """
-    Requirement 2 & 4: Variant breakdown view. Sums quantities per unique variant,
-    disregarding hyphens and spacing mutations during aggregation.
+    Requirement 2 & 4: Generates sequential rows grouped by Variant and Department.
+    Finds the first production (In Date) and last production (Out Date) for each registry.
     """
     ch_filtered = [r for r in GLOBAL_CH_ROWS if r["ch"] == ch and r["fam"] == fam]
     tb_filtered = [r for r in GLOBAL_TB_ROWS if r["ch"] == ch and r["fam"] == fam]
     
-    variants_map = {}
-    
-    # Process SHO & Transit Buffer entries (sharing raw input reference)
+    # Extract unique MO context for this scope block
+    found_mos = sorted(list(set([str(r["mo"]).strip() for r in ch_filtered if r.get("mo")])))
+    mo_reference = ", ".join(found_mos) if found_mos else "-"
+    if mo_reference != "-" and ch:
+        mo_display = f"{mo_reference} (Ch: {ch})"
+    else:
+        mo_display = f"Ch: {ch}" if ch else mo_reference
+
+    # Processing maps for sequential flat stacking
+    sho_map = {}
+    tb_map = {}
+    ch_map = {}
+
+    # Gather SHO & Transit Buffer entries
     for r in tb_filtered:
         raw_v = r["variant"]
         norm_key = str(raw_v).upper().replace("-", "").replace(" ", "")
         if not norm_key: continue
         
-        if norm_key not in variants_map:
-            variants_map[norm_key] = {"variant_label": raw_v, "sho_qty": 0.0, "tb_qty": 0.0, "ch_qty": 0.0}
-        
-        variants_map[norm_key]["sho_qty"] += r["qty"]
-        variants_map[norm_key]["tb_qty"] += r["qty"]
+        # Populate SHO Registry Map
+        if norm_key not in sho_map:
+            sho_map[norm_key] = {"label": raw_v, "qty": 0.0, "dates": []}
+        sho_map[norm_key]["qty"] += r["qty"]
+        if r["date"]: sho_map[norm_key]["dates"].append(r["date"])
 
-    # Process Channel section entries
+        # Populate Transit Buffer Registry Map
+        if norm_key not in tb_map:
+            tb_map[norm_key] = {"label": raw_v, "qty": 0.0, "dates": []}
+        tb_map[norm_key]["qty"] += r["qty"]
+        if r["date"]: tb_map[norm_key]["dates"].append(r["date"])
+
+    # Gather Channel Section entries
     for r in ch_filtered:
         raw_v = r["variant"]
         norm_key = str(raw_v).upper().replace("-", "").replace(" ", "")
         if not norm_key: continue
         
-        if norm_key not in variants_map:
-            variants_map[norm_key] = {"variant_label": raw_v, "sho_qty": 0.0, "tb_qty": 0.0, "ch_qty": 0.0}
-            
-        variants_map[norm_key]["ch_qty"] += r["qty"]
+        if norm_key not in ch_map:
+            ch_map[norm_key] = {"label": raw_v, "qty": 0.0, "dates": []}
+        ch_map[norm_key]["qty"] += r["qty"]
+        if r["date"]: ch_map[norm_key]["dates"].append(r["date"])
 
-    # Compile and apply math.ceil onto total sums
-    results = []
-    for norm_key, data in variants_map.items():
-        results.append({
-            "variant": data["variant_label"],
-            "sho_qty": math.ceil(data["sho_qty"]),
-            "tb_qty": math.ceil(data["tb_qty"]),
-            "ch_qty": math.ceil(data["ch_qty"])
+    sequential_rows = []
+
+    # Compile flat entries for SHO
+    for k, data in sho_map.items():
+        in_d = str(min(data["dates"])) if data["dates"] else "-"
+        out_d = str(max(data["dates"])) if data["dates"] else "-"
+        sequential_rows.append({
+            "mo_ref": mo_display,
+            "department": "SHO Department",
+            "variant": data["label"],
+            "in_date": in_d,
+            "out_date": "-",  # Tailored to match your sample layout format rules
+            "qty": math.ceil(data["qty"]),
+            "status": "Allocated"
         })
-        
-    results.sort(key=lambda x: x["variant"])
-    return {"status": "success", "data": results}
+
+    # Compile flat entries for Transit Buffer
+    for k, data in tb_map.items():
+        in_d = str(min(data["dates"])) if data["dates"] else "-"
+        out_d = str(max(data["dates"])) if data["dates"] else "-"
+        sequential_rows.append({
+            "mo_ref": mo_display,
+            "department": "Transit Buffer",
+            "variant": data["label"],
+            "in_date": "-",
+            "out_date": out_d,
+            "qty": math.ceil(data["qty"]),
+            "status": "In Transit"
+        })
+
+    # Compile flat entries for Channel Section
+    for k, data in ch_map.items():
+        in_d = str(min(data["dates"])) if data["dates"] else "-"
+        out_d = str(max(data["dates"])) if data["dates"] else "-"
+        sequential_rows.append({
+            "mo_ref": mo_display,
+            "department": "Channel Section",
+            "variant": data["label"],
+            "in_date": in_d,
+            "out_date": out_d,
+            "qty": math.ceil(data["qty"]),
+            "status": "Completed"
+        })
+
+    return {"status": "success", "data": sequential_rows}
