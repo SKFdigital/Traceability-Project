@@ -24,6 +24,29 @@
   margin: 0 0 4px 0;
 }
 
+/* Add this inside your TBE.css */
+.table-wrapper {
+  max-height: 75vh;
+  overflow-y: auto;
+  position: relative;
+}
+
+.trace-table th {
+  position: sticky;
+  z-index: 2;
+  box-shadow: 0 2px 2px -1px rgba(0, 0, 0, 0.4);
+}
+
+/* The top row of headers */
+.super-header th {
+  top: 0;
+}
+
+/* The bottom row of headers */
+.sub-header th {
+  top: 38px; /* You may need to tweak this slightly (e.g., 40px, 45px) depending on your exact font size */
+}
+
 .sub-tag {
   color: #64748b;
   font-size: 14px;
