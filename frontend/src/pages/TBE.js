@@ -51,7 +51,6 @@ const TBE = () => {
     (item.product_variant && String(item.product_variant).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // Sorting restored to keep IM/OM together
   const sortedSummary = [...filteredSummary].sort((a, b) => {
     if (a.channel_ref !== b.channel_ref) {
       return String(a.channel_ref || '').localeCompare(String(b.channel_ref || ''));
@@ -62,14 +61,33 @@ const TBE = () => {
     return String(a.ring_type || '').localeCompare(String(b.ring_type || ''));
   });
 
+  // Merges the Channel Name block vertically
   const getChannelRowSpan = (dataArray, currentIndex) => {
     const currentRef = dataArray[currentIndex].channel_ref;
     if (!currentRef) return 1;
-    if (currentIndex > 0 && dataArray[currentIndex - 1].channel_ref === currentRef) {
-      return 0; 
-    }
+    if (currentIndex > 0 && dataArray[currentIndex - 1].channel_ref === currentRef) return 0; 
     let span = 1;
     while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].channel_ref === currentRef) {
+      span++;
+    }
+    return span;
+  };
+
+  // Merges the Channel Production columns vertically for IM/OM sharing the same family
+  const getFamilyRowSpan = (dataArray, currentIndex) => {
+    const currentRef = dataArray[currentIndex].channel_ref;
+    const currentFam = dataArray[currentIndex].product_variant;
+    if (!currentRef || !currentFam) return 1;
+    
+    if (currentIndex > 0 && 
+        dataArray[currentIndex - 1].channel_ref === currentRef &&
+        dataArray[currentIndex - 1].product_variant === currentFam) {
+      return 0; // Hide this cell, it will be merged into the cell above it
+    }
+    let span = 1;
+    while (currentIndex + span < dataArray.length && 
+           dataArray[currentIndex + span].channel_ref === currentRef &&
+           dataArray[currentIndex + span].product_variant === currentFam) {
       span++;
     }
     return span;
@@ -115,8 +133,8 @@ const TBE = () => {
             <thead>
               <tr className="super-header">
                 <th colSpan="3" className="meta-head">Connection Mapping</th>
-                <th colSpan="2" className="sho-head">SHO Department</th>
-                <th colSpan="2" className="tb-head">Transit Buffer</th>
+                <th colSpan="2" className="sho-head">SHO Department (Split)</th>
+                <th colSpan="2" className="tb-head">Transit Buffer (Split)</th>
                 <th colSpan="3" className="ch-head">Channel Section (Combined Rollup)</th>
                 <th className="meta-head">Status Tracker</th>
               </tr>
@@ -137,17 +155,26 @@ const TBE = () => {
             <tbody>
               {sortedSummary.map((row, idx) => {
                 const channelSpan = getChannelRowSpan(sortedSummary, idx);
+                const familySpan = getFamilyRowSpan(sortedSummary, idx);
                 const uniqueKey = `${row.channel_ref || 'b'}-${row.product_variant || 'b'}-${row.ring_type || 'b'}-${idx}`;
                 
                 return (
                   <tr key={uniqueKey} className="data-row">
+                    {/* Merged Channel Name */}
                     {channelSpan > 0 && (
                       <td rowSpan={channelSpan} className="merged-mo-cell fw-bold">
                         {row.channel_ref || '-'}
                       </td>
                     )}
 
-                    <td className="fw-bold text-primary">{row.product_variant}</td>
+                    {/* Merged Family Name */}
+                    {familySpan > 0 && (
+                      <td rowSpan={familySpan} className="fw-bold text-primary">
+                        {row.product_variant}
+                      </td>
+                    )}
+                    
+                    {/* Split IM/OM rows */}
                     <td className="fw-bold">{row.ring_type}</td>
                     
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '0'}</td>
@@ -156,12 +183,20 @@ const TBE = () => {
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '0'}</td>
                     <td>{row.tb_out || '-'}</td>
                     
-                    <td className="merged-channel-cell fw-bold text-success">
-                      {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '0'}
-                    </td>
-                    <td className="merged-channel-cell">{row.ch_in || '-'}</td>
-                    <td className="merged-channel-cell">{row.ch_out || '-'}</td>
+                    {/* Rolled up Channel columns spanning across the IM/OM rows */}
+                    {familySpan > 0 && (
+                      <td rowSpan={familySpan} className="merged-channel-cell fw-bold text-success">
+                        {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '0'}
+                      </td>
+                    )}
+                    {familySpan > 0 && (
+                      <td rowSpan={familySpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
+                    )}
+                    {familySpan > 0 && (
+                      <td rowSpan={familySpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
+                    )}
                     
+                    {/* Status Tracker is independent per IM/OM line so you can see if only one is complete */}
                     <td>
                       <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
                         {row.status || 'In Process'}
