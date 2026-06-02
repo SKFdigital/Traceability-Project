@@ -40,14 +40,8 @@
   box-shadow: 0 2px 2px -1px rgba(0, 0, 0, 0.4);
 }
 
-/* Sticky Rows Header Control */
-.super-header th {
-  top: 0;
-}
-
-.sub-header th {
-  top: 38px; 
-}
+.super-header th { top: 0; }
+.sub-header th { top: 38px; }
 
 .sub-tag {
   color: #64748b;
@@ -55,7 +49,7 @@
   margin: 0;
 }
 
-/* Control Elements */
+/* Control Actions */
 .control-actions {
   display: flex;
   gap: 12px;
@@ -93,7 +87,7 @@
   background-color: #e2e8f0;
 }
 
-/* Table Architecture Grid */
+/* Main Dashboard Table Geometry */
 .trace-table {
   width: 100%;
   border-collapse: collapse; 
@@ -109,7 +103,6 @@
   vertical-align: middle;
 }
 
-/* Super Headers Component Department Grouping */
 .super-header th {
   color: #ffffff;
   font-weight: 600;
@@ -124,14 +117,12 @@
 .tb-head   { background-color: #7c2d12; } 
 .ch-head   { background-color: #065f46; } 
 
-/* Metrics Sub Headers */
 .sub-header th {
   background-color: #f8fafc;
   color: #475569;
   font-weight: 600;
 }
 
-/* Data Row Mutations & Merges */
 .data-row:hover td {
   background-color: #f8fafc;
 }
@@ -141,12 +132,12 @@
   background-color: #ffffff !important; 
 }
 
-/* Interactive Component Interlock */
+/* Interactive Component Bindings */
 .clickable-family-cell {
   cursor: pointer;
   text-decoration: underline;
   color: #2563eb !important;
-  transition: all 0.15s ease;
+  transition: all 0.12s ease;
 }
 
 .clickable-family-cell:hover {
@@ -154,17 +145,10 @@
   color: #1d4ed8 !important;
 }
 
-/* Typography Utility Modifiers */
-.fw-bold {
-  font-weight: 700;
-  color: #0f172a;
-}
+.fw-bold { font-weight: 700; color: #0f172a; }
+.text-start { text-align: left; }
 
-.text-start {
-  text-align: left;
-}
-
-/* State Status Badge System */
+/* Badges */
 .status-badge {
   display: inline-block;
   padding: 4px 12px;
@@ -175,64 +159,17 @@
   letter-spacing: 0.3px;
 }
 
-.status-badge.completed {
-  background-color: #dcfce7;
-  color: #166534;
-}
+.status-badge.completed { background-color: #dcfce7; color: #166534; }
+.status-badge.in-process, .status-badge.pending, .status-badge.default { background-color: #fef9c3; color: #854d0e; }
+.status-badge.yet-to-start { background-color: #e2e8f0; color: #475569; }
 
-.status-badge.in-process,
-.status-badge.pending,
-.status-badge.default {
-  background-color: #fef9c3;
-  color: #854d0e;
-}
+/* Statuses and Feedbacks */
+.empty-state { text-align: center; padding: 40px !important; color: #64748b; font-style: italic; }
+.loading-spinner { text-align: center; padding: 40px; color: #64748b; font-weight: 600; }
+.error-box { background-color: #fee2e2; color: #991b1b; padding: 16px; border-radius: 6px; margin-bottom: 24px; border: 1px solid #f87171; font-weight: 500; }
+.initializing-box { background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 24px; border-radius: 8px; text-align: center; margin-bottom: 24px; }
+.initializing-box strong { color: #1e3a8a; display: block; margin-bottom: 4px; }
 
-.status-badge.yet-to-start {
-  background-color: #e2e8f0;
-  color: #475569;
-}
-
-/* Pipeline States, Loaders & Errors */
-.empty-state {
-  text-align: center;
-  padding: 40px !important;
-  color: #64748b;
-  font-style: italic;
-}
-
-.loading-spinner {
-  text-align: center;
-  padding: 40px;
-  color: #64748b;
-  font-weight: 600;
-}
-
-.error-box {
-  background-color: #fee2e2;
-  color: #991b1b;
-  padding: 16px;
-  border-radius: 6px;
-  margin-bottom: 24px;
-  border: 1px solid #f87171;
-  font-weight: 500;
-}
-
-.initializing-box {
-  background-color: #eff6ff;
-  border: 1px solid #bfdbfe;
-  padding: 24px;
-  border-radius: 8px;
-  text-align: center;
-  margin-bottom: 24px;
-}
-
-.initializing-box strong { 
-  color: #1e3a8a; 
-  display: block;
-  margin-bottom: 4px;
-}
-
-/* CSS Live Wireframe Spinner Keyframe */
 .spinner {
   width: 28px;
   height: 28px;
@@ -243,16 +180,13 @@
   animation: spin 0.8s linear infinite;
 }
 
-.text-primary { color: #2563eb; }
-.text-success { color: #166534; }
-
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
 
 /* ==========================================================================
-   Modal Breakdown Interface Overlay Architecture
+   Drilldown Sequential Flat Layout Modal Engine
    ========================================================================== */
 .modal-overlay {
   position: fixed;
@@ -271,17 +205,17 @@
 .modal-content {
   background: #ffffff;
   border-radius: 12px;
-  width: 750px;
-  max-width: 92%;
+  width: 960px;
+  max-width: 94%;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-  animation: modalSlideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: modalSlideUp 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes modalSlideUp {
-  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
@@ -320,25 +254,11 @@
   transition: color 0.15s;
 }
 
-.close-modal-btn:hover {
-  color: #475569;
-}
+.close-modal-btn:hover { color: #475569; }
+.modal-body { padding: 20px; overflow-y: auto; background-color: #ffffff; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
+.modal-table-wrapper { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.02); }
 
-.modal-body {
-  padding: 24px;
-  overflow-y: auto;
-  background-color: #ffffff;
-  border-bottom-left-radius: 12px;
-  border-bottom-right-radius: 12px;
-}
-
-.modal-table-wrapper {
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-/* Detail Variant Table Style (Stacked entries sequence) */
+/* Sequential Stacked Flat Table Theme */
 .detail-variant-table {
   width: 100%;
   border-collapse: collapse;
@@ -347,9 +267,9 @@
 }
 
 .detail-variant-table th {
-  background-color: #1e293b;
+  background-color: #0f172a;
   color: #ffffff;
-  padding: 12px;
+  padding: 14px 12px;
   font-weight: 600;
   font-size: 12px;
   text-transform: uppercase;
@@ -357,21 +277,38 @@
 }
 
 .detail-variant-table td {
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid #f1f5f9;
   padding: 12px;
-  color: #334155;
+  color: #475569;
+  vertical-align: middle;
 }
 
-.detail-variant-table tr:last-child td {
-  border-bottom: none;
-}
-
-.detail-variant-table tr:nth-child(even) {
+.modal-data-row:hover {
   background-color: #f8fafc;
 }
 
-.detail-loading-box {
-  text-align: center;
-  padding: 32px 0;
+/* Department Location Custom Labels */
+.dept-tag {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.dept-tag.sho-department { background-color: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+.dept-tag.transit-buffer { background-color: #fff7ed; color: #9a3412; border: 1px solid #ffedd5; }
+.dept-tag.channel-section { background-color: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+
+.execution-status-dot {
+  font-size: 12px;
   color: #64748b;
 }
+.execution-status-dot::before {
+  content: "•";
+  color: #3b82f6;
+  font-size: 18px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.detail-loading-box { text-align: center; padding: 32px 0; color: #64748b; }
