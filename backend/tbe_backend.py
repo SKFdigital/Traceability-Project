@@ -17,33 +17,22 @@ CACHE_DURATION_MINUTES = 5
 
 def repair_sheet_headers(df):
     if df.empty: return df
-    
-    # We look for normalized keywords. Removing spaces and symbols to make it bulletproof.
     targets = {"ch", "chno", "type", "noofrings", "date", "netwt", "ringwt", "qty", "quantity"}
-    
     best_row_idx = -1
     max_score = 0
     
-    # Deep scan the first 20 rows to bypass massive banners like "DDM AUTO to Industrial..."
     for idx in range(min(20, len(df))):
-        # Convert row to a list of strings, forced to lowercase, no spaces or hashes
         row_vals = [str(val).strip().lower().replace(" ", "").replace("#", "") for val in df.iloc[idx].values]
-        
-        # Check how many of our target keywords exist in this row
         score = sum(1 for t in targets if any(t in v for v in row_vals))
-        
         if score > max_score:
             max_score = score
             best_row_idx = idx
             
-    # If we found a row with at least 2 real column headers, lock onto it
     if max_score >= 2 and best_row_idx >= 0:
         new_cols = df.iloc[best_row_idx].tolist()
         new_cols = [str(c).strip() if pd.notna(c) else f"Unnamed_{i}" for i, c in enumerate(new_cols)]
         df.columns = new_cols
-        # Return the data starting from the row underneath the newly locked headers
         return df.iloc[best_row_idx+1:].reset_index(drop=True)
-        
     return df
 
 def find_column(df, patterns):
@@ -53,39 +42,43 @@ def find_column(df, patterns):
         for c in cols:
             norm_c = c.lower().replace(" ", "").replace("_", "").replace("#", "")
             if norm_c == norm_p: return c
-                
-    for p in patterns:
-        norm_p = p.lower().replace(" ", "").replace("_", "")
-        if len(norm_p) <= 2: continue
-        for c in cols:
-            norm_c = c.lower().replace(" ", "").replace("_", "")
-            if norm_p in norm_c or norm_c in norm_p: return c
     return None
 
-def normalize_channel(value):
+def normalize_channel(value, force_t_prefix=False):
     if pd.isna(value): return ""
     val_str = str(value).strip().upper()
-    for prefix in ["CH-", "CH.", "CH", "CHANNEL-", "CHANNEL", "T-", "T", "SHEET", "SHEET-"]:
+    
+    for prefix in ["CH-", "CH.", "CH", "CHANNEL-", "CHANNEL", "SHEET-", "SHEET"]:
         if val_str.startswith(prefix): val_str = val_str[len(prefix):].strip()
+        
     val_str = val_str.replace("-", "").replace(" ", "").strip()
     if val_str.endswith(".0"): val_str = val_str[:-2]
-    cleaned = val_str.lstrip("0")
-    return cleaned if cleaned else "0"
+    
+    cleaned = val_str.lstrip("0") if val_str.lstrip("0") else "0"
+    
+    if force_t_prefix and not cleaned.startswith("T"):
+        return f"T{cleaned}"
+    return cleaned
 
-# Extracts ONLY the family number (used for Channel matching)
+# Extracts Family and prepends BT/BB to force separation
 def parse_family(prod_text):
     text = str(prod_text).strip().upper()
     if not text or text in ["NAN", "NONE", ""]: return "UNKNOWN"
+    
     match = re.search(r'(\d{3,5})', text)
-    if match: return match.group(1)
-    return text.split()[0].split('-')[0]
+    base = match.group(1) if match else text.split()[0].split('-')[0]
+    
+    if re.search(r'\bBT\b', text) or text.startswith("BT"):
+        base = f"BT-{base}"
+    elif re.search(r'\bBB\b', text) or text.startswith("BB"):
+        base = f"BB-{base}"
+        
+    return base
 
-# Extracts Family AND Ring Type (used to isolate IM vs OM)
 def parse_family_and_type(prod_text):
     text = str(prod_text).strip().upper()
     if not text or text in ["NAN", "NONE", ""]: return "UNKNOWN", "ASSEMBLY"
     
-    # Aggressively identify IM or OM
     r_type = "ASSEMBLY"
     if any(x in text for x in ["IM", "IR"]): r_type = "IM"
     elif any(x in text for x in ["OM", "OR"]): r_type = "OM"
@@ -116,8 +109,34 @@ def load_excel_sheets(url):
         xls = pd.ExcelFile(io.BytesIO(resp.content))
         return {sheet: repair_sheet_headers(xls.parse(sheet)) for sheet in xls.sheet_names}
     except Exception as e:
-        print(f"⚠️ Sheet stream error: {str(e)}")
         return {}
+
+def process_master_sheets(sheets_dict, is_trb):
+    ch_list = []
+    for sheet_name, df in sheets_dict.items():
+        if df.empty or sheet_name in ['Pivot Table 1', 'Pivot Table 2', 'PIC List', 'List']: continue
+        
+        c_col = find_column(df, ["channel", "channelno", "machineno", "line", "mo", "ch"])
+        type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "desc", "family", "part"])
+        d_col = find_column(df, ["date", "day", "txndate"])
+        prod_col = find_column(df, ["production", "prodqty", "shiftproduction", "qty", "quantity"])
+
+        if not type_col: continue 
+
+        for _, row in df.iterrows():
+            c_val = row.get(c_col) if c_col else sheet_name
+            ch = normalize_channel(c_val, force_t_prefix=is_trb)
+            if not ch or ch == "0": ch = normalize_channel(sheet_name, force_t_prefix=is_trb)
+            
+            prod_str = str(row.get(type_col)).strip().upper()
+            if prod_str in ["", "NAN"]: continue
+            
+            base_family = parse_family(prod_str)
+            qty = clean_nan(row.get(prod_col)) if prod_col else 0.0
+            dt = parse_date_safe(row.get(d_col))
+
+            ch_list.append({"ch": ch, "fam": base_family, "qty": qty, "date": dt})
+    return ch_list
 
 def process_tbe_data():
     global MASTER_CACHE, LAST_REFRESH, IS_UPDATING, INITIALIZED
@@ -127,32 +146,11 @@ def process_tbe_data():
     try:
         from settings import settings
         ring_wt_sheets = load_excel_sheets(settings.RINGWT_TRANSITBUFFER_URL)
-        channel_master_sheets = {**load_excel_sheets(settings.TRB_MASTER_URL), **load_excel_sheets(settings.DGBB_MASTER_URL)}
+        trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
+        dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
 
-        # --- STEP 1: CHANNEL SHEETS (Common Rollup) ---
-        ch_list = []
-        for sheet_name, df in channel_master_sheets.items():
-            if df.empty or sheet_name in ['Pivot Table 1', 'Pivot Table 2', 'PIC List', 'List']: continue
-            
-            c_col = find_column(df, ["channel", "channelno", "machineno", "line", "mo", "ch"])
-            type_col = find_column(df, ["type", "variant", "bearing", "product", "item", "desc", "description", "family", "part"])
-            d_col = find_column(df, ["date", "day", "txndate"])
-            prod_col = find_column(df, ["production", "prodqty", "shiftproduction", "qty", "quantity", "cumulative"])
-
-            if not type_col: continue 
-
-            for _, row in df.iterrows():
-                ch = normalize_channel(row.get(c_col)) if c_col else normalize_channel(sheet_name)
-                if not ch or ch == "0": ch = normalize_channel(sheet_name)
-                
-                prod_str = str(row.get(type_col)).strip().upper()
-                if prod_str in ["", "NAN"]: continue
-                
-                base_family = parse_family(prod_str)
-                qty = clean_nan(row.get(prod_col)) if prod_col else 0.0
-                dt = parse_date_safe(row.get(d_col))
-
-                ch_list.append({"ch": ch, "fam": base_family, "qty": qty, "date": dt})
+        # --- STEP 1: CHANNEL SHEETS (Apply TRB prefix logic) ---
+        ch_list = process_master_sheets(trb_sheets, is_trb=True) + process_master_sheets(dgbb_sheets, is_trb=False)
 
         df_ch_grouped = pd.DataFrame(ch_list).groupby(["ch", "fam"]).agg(
             ch_qty=('qty', 'sum'),
@@ -160,22 +158,30 @@ def process_tbe_data():
             ch_max_date=('date', lambda x: max([d for d in x if d is not None], default=None))
         ).reset_index() if ch_list else pd.DataFrame(columns=["ch", "fam", "ch_qty", "ch_min_date", "ch_max_date"])
 
-        # --- STEP 2: TRANSIT BUFFER (Split IM/OM) ---
+        # --- STEP 2: TRANSIT BUFFER (Lock onto No Of Rings strictly) ---
         tb_list = []
         for sheet_name, df in ring_wt_sheets.items():
             if df.empty: continue
             
-            # EXACT column mapping based on your image
-            c_col = find_column(df, ["ch#no", "ch# no", "channelref", "channel", "channelno", "machineno", "mo", "line", "ch", "machine"])
-            f_col = find_column(df, ["type", "ringfamily", "family", "variant", "product", "item", "desc", "description", "part", "model", "brg"])
-            q_col = find_column(df, ["noofrings", "no of rings", "qty", "quantity", "rings", "totalqtyrecd", "recdqty", "total", "count"])
-            d_col = find_column(df, ["date", "indate", "outdate", "day", "txndate", "dispatchdate"])
-
+            c_col = find_column(df, ["ch#no", "ch# no", "channelref", "channel", "machineno"])
+            f_col = find_column(df, ["type", "ringfamily", "family", "variant", "product"])
+            d_col = find_column(df, ["date", "indate", "outdate", "day"])
+            
+            # STRICT lock onto No Of Rings to avoid fetching Ring Wt
+            q_col = None
+            for c in df.columns:
+                if str(c).lower().replace(" ", "").replace("#", "") == "noofrings":
+                    q_col = c
+                    break
+            if not q_col: q_col = find_column(df, ["qty", "quantity", "total"])
+            
             if not f_col: continue 
 
             for _, row in df.iterrows():
-                ch = normalize_channel(row.get(c_col)) if c_col else normalize_channel(sheet_name)
-                if not ch or ch == "0": ch = normalize_channel(sheet_name)
+                # We do not force T prefix here, assuming Transit sheet natively has the correct T notation if required
+                c_val = row.get(c_col) if c_col else sheet_name
+                ch = normalize_channel(c_val, force_t_prefix=False) 
+                if not ch or ch == "0": ch = normalize_channel(sheet_name, force_t_prefix=False)
                 
                 prod_text = str(row.get(f_col)).strip().upper()
                 if prod_text in ["", "NAN"]: continue
@@ -186,7 +192,6 @@ def process_tbe_data():
 
                 tb_list.append({"ch": ch, "fam": base_family, "type": r_type, "qty": qty, "date": dt})
 
-        # Grouping by Type ensures all IMs sum together, and all OMs sum together as distinct rows
         df_tb_grouped = pd.DataFrame(tb_list).groupby(["ch", "fam", "type"]).agg(
             tb_qty=('qty', 'sum'),
             tb_min_date=('date', lambda x: min([d for d in x if d is not None], default=None)),
@@ -199,7 +204,6 @@ def process_tbe_data():
             LAST_REFRESH = datetime.now()
             return
 
-        # Matches on Channel and Family to broadcast Channel data across both IM and OM rows
         merged = pd.merge(df_tb_grouped, df_ch_grouped, on=["ch", "fam"], how="outer")
         
         compiled_summary = []
