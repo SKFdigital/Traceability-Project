@@ -21,8 +21,7 @@ const Traceability = () => {
       setLoading(true);
       setError('');
       const res = await fetch(`${API}/traceability_all_mos`);
-      if (!res.ok) throw new Error('Network error pulling records from pipeline.');
-      
+      if (!res.ok) throw new Error('Network error pulling records.');
       const json = await res.json();
       
       if (json.status === 'initializing') {
@@ -44,7 +43,7 @@ const Traceability = () => {
       setLoading(true);
       setError('');
       const res = await fetch(`${API}/traceability_report/${moString.trim()}`);
-      if (!res.ok) throw new Error('Could not pull tracking sequence for this production order.');
+      if (!res.ok) throw new Error('Could not pull variant flow.');
       const json = await res.json();
       
       if (json.status === 'success') {
@@ -65,13 +64,6 @@ const Traceability = () => {
     (item.base_product && String(item.base_product).toLowerCase().includes(search.toLowerCase()))
   );
 
-  const sortedSummary = [...filteredSummary].sort((a, b) => {
-    if (a.mo !== b.mo) {
-      return (a.mo || '').localeCompare(b.mo || '');
-    }
-    return String(a.base_product || '').localeCompare(String(b.base_product || ''));
-  });
-
   const getMoRowSpan = (dataArray, currentIndex) => {
     const currentMo = dataArray[currentIndex].mo;
     if (currentIndex > 0 && dataArray[currentIndex - 1].mo === currentMo) {
@@ -84,46 +76,25 @@ const Traceability = () => {
     return span;
   };
 
-  const getChannelRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo;
-    const currentFamily = dataArray[currentIndex].base_product;
-    
-    if (currentIndex > 0 && 
-        dataArray[currentIndex - 1].mo === currentMo && 
-        dataArray[currentIndex - 1].base_product === currentFamily) {
-      return 0; 
-    }
-    
-    let span = 1;
-    while (
-      currentIndex + span < dataArray.length && 
-      dataArray[currentIndex + span].mo === currentMo &&
-      dataArray[currentIndex + span].base_product === currentFamily
-    ) {
-      span++;
-    }
-    return span;
-  };
-
   return (
     <div className="traceability-container">
       <div className="header-section">
         <div>
           <h1>MO Traceability Tracking</h1>
           <p className="sub-tag">
-            {selectedMoFlow ? `Detailed Route Flow / Order Group: ${selectedMoFlow.mo}` : "Production Order Global KPI Summary Dashboard"}
+            {selectedMoFlow ? `Variant Breakdown / MO: ${selectedMoFlow.mo}` : "Global Order Summary by Family"}
           </p>
         </div>
         
         <div className="control-actions">
           {selectedMoFlow ? (
             <button className="back-btn" onClick={() => setSelectedMoFlow(null)}>
-              ← Back to Summary Dashboard
+              ← Back to Summary
             </button>
           ) : (
             <input
               className="search-box"
-              placeholder="Filter Dashboard Summary..."
+              placeholder="Search MO or Family..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               disabled={isInitializing}
@@ -138,44 +109,37 @@ const Traceability = () => {
         <div className="initializing-box">
           <div className="spinner"></div>
           <p><strong>System Backend is warming up...</strong></p>
-          <p className="sub-text">Downloading and parsing master excel configurations. Auto-refreshing in a few moments...</p>
         </div>
       )}
 
-      {loading && !isInitializing && <div className="loading-spinner">Querying Database Pipeline Cache...</div>}
-
-      {/* VIEW BLOCK 1: MAIN SUMMARY DASHBOARD */}
+      {/* MAIN DASHBOARD: GROUPED BY FAMILY (BASE PRODUCT) */}
       {!loading && !isInitializing && !selectedMoFlow && (
         <div className="table-wrapper">
           <table className="trace-table">
             <thead>
               <tr className="super-header">
-                <th colSpan="4" className="meta-head">Order Metadata</th>
-                <th colSpan="2" className="sho-head">SHO Department</th>
+                <th colSpan="3" className="meta-head">Order Details</th>
+                <th colSpan="2" className="sho-head">SHO Target</th>
                 <th colSpan="2" className="tb-head">Transit Buffer</th>
-                <th colSpan="3" className="ch-head">Channel Section (Combined)</th>
-                <th className="meta-head">System Status</th>
+                <th colSpan="2" className="ch-head">Channel Section</th>
+                <th className="meta-head">Overall Status</th>
               </tr>
               <tr className="sub-header">
                 <th>MO Number</th>
-                <th>Product Variant</th>
+                <th>Family (Base Product)</th>
                 <th>Target Qty</th>
-                <th>Ring Type</th>
                 <th>Qty</th>
                 <th>In Date</th>
                 <th>Qty</th>
                 <th>Out Date</th>
                 <th>Qty</th>
-                <th>In Date</th>
                 <th>Out Date</th>
-                <th>Tracking Status</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {sortedSummary.map((row, idx) => {
-                const moSpan = getMoRowSpan(sortedSummary, idx);
-                const channelSpan = getChannelRowSpan(sortedSummary, idx);
-                
+              {filteredSummary.map((row, idx) => {
+                const moSpan = getMoRowSpan(filteredSummary, idx);
                 return (
                   <tr key={idx} className="data-row">
                     {moSpan > 0 && (
@@ -185,89 +149,77 @@ const Traceability = () => {
                         </button>
                       </td>
                     )}
-
                     <td className="fw-bold">{row.base_product}</td>
                     <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
-                    <td className="fw-bold">{row.component_type}</td>
                     
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '-'}</td>
-                    <td>{row.sho_in || '-'}</td>
+                    <td>{row.sho_date}</td>
                     
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '-'}</td>
-                    <td>{row.tb_out || '-'}</td>
+                    <td>{row.tb_date}</td>
                     
-                    {channelSpan > 0 && (
-                      <>
-                        <td rowSpan={channelSpan} className="merged-channel-cell fw-bold">
-                          {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}
-                        </td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_in || '-'}</td>
-                        <td rowSpan={channelSpan} className="merged-channel-cell">{row.ch_out || '-'}</td>
-                      </>
-                    )}
+                    <td className="fw-bold">{row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}</td>
+                    <td>{row.ch_date}</td>
                     
                     <td>
-                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
-                        {row.status || 'In Process'}
+                      <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                        {row.status}
                       </span>
                     </td>
                   </tr>
                 );
               })}
-              {sortedSummary.length === 0 && (
-                <tr>
-                  <td colSpan="12" className="empty-state">
-                    No matching Production Tracking data frames located.
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* VIEW BLOCK 2: REDESIGNED TARGET MO SECTOR ROUTE DETAILED FLOW */}
-      {!loading && selectedMoFlow && selectedMoFlow.flow_data && (
+      {/* DRILLDOWN: EXACT TBE FORMAT BY FINAL VARIANT */}
+      {!loading && selectedMoFlow && (
         <div className="table-wrapper">
           <table className="trace-table">
             <thead>
+              <tr className="super-header">
+                <th colSpan="2" className="meta-head">Variant Details</th>
+                <th colSpan="2" className="sho-head">SHO Dept</th>
+                <th colSpan="2" className="tb-head">Transit Buffer</th>
+                <th colSpan="2" className="ch-head">Channel Processing</th>
+                <th className="meta-head">Final Status</th>
+              </tr>
               <tr className="sub-header">
-                <th>MO Reference</th>
-                <th>Department / Routing Location</th>
-                <th>Product / Part Sub Variant</th>
-                <th>In Date</th>
-                <th>Out Date</th>
-                <th>Production Qty</th>
-                <th>Execution Status</th>
+                <th>Final Variant</th>
+                <th>Req Qty</th>
+                <th>SHO Qty</th>
+                <th>Last Date</th>
+                <th>TB Qty</th>
+                <th>Last Date</th>
+                <th>Chan Qty</th>
+                <th>Last Date</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {selectedMoFlow.flow_data.map((row, index) => {
-                return (
-                  <tr key={index} className="data-row">
-                    <td className="fw-bold" style={{ color: '#0284c7' }}>{row.mo_ref}</td>
-                    <td className="fw-bold">{row.department}</td>
-                    <td>{row.product || '-'}</td>
-                    <td>{row.in_date || '-'}</td>
-                    <td>{row.out_date || '-'}</td>
-                    <td className="qty-cell fw-bold">
-                      {row.qty ? Number(row.qty).toLocaleString() : 0}
-                    </td>
-                    <td>
-                      <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : 'in-process'}`}>
-                        {row.status || '-'}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-              {selectedMoFlow.flow_data.length === 0 && (
-                <tr>
-                  <td colSpan="7" className="empty-state">
-                    No fine-grained movement records registered for this sequence.
+              {selectedMoFlow.flow_data.map((row, index) => (
+                <tr key={index} className="data-row">
+                  <td className="fw-bold" style={{ color: '#0284c7' }}>{row.variant}</td>
+                  <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
+                  
+                  <td>{row.sho_qty > 0 ? Number(row.sho_qty).toLocaleString() : '-'}</td>
+                  <td>{row.sho_date}</td>
+                  
+                  <td>{row.tb_qty > 0 ? Number(row.tb_qty).toLocaleString() : '-'}</td>
+                  <td>{row.tb_date}</td>
+                  
+                  <td className="fw-bold">{row.ch_qty > 0 ? Number(row.ch_qty).toLocaleString() : '-'}</td>
+                  <td>{row.ch_date}</td>
+                  
+                  <td>
+                    <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                      {row.status}
+                    </span>
                   </td>
                 </tr>
-              )}
+              ))}
             </tbody>
           </table>
         </div>
