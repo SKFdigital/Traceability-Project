@@ -5,7 +5,6 @@ import io
 import threading
 import time
 import math
-import re
 from datetime import datetime
 from settings import settings
 
@@ -27,8 +26,6 @@ def clean_mo(value):
     return val
 
 def get_mo_group(clean_mo_str):
-    # Removed the aggressive regex slicing that was breaking MO grouping and ring counts.
-    # Now returns the exact cleaned MO string for accurate 1:1 mapping.
     return clean_mo_str
 
 def clean_nan(value):
@@ -52,6 +49,13 @@ def determine_component(text):
     if "OM" in text or "OUTER" in text: return "OM"
     return "IM" # Default Inner Module
 
+def is_valid_family(text):
+    """Prevents IM/OM from being set as the family base product"""
+    t = str(text).strip().upper()
+    if t in ["IM", "OM", "INNER", "OUTER", "GENERIC PRODUCT", "NAN", "NONE", ""]:
+        return False
+    return True
+
 def load_excel_sheets(url):
     try:
         resp = HTTP_SESSION.get(url, timeout=30)
@@ -66,12 +70,11 @@ def load_excel_sheets(url):
     except:
         return {}
 
-def ensure_mo_in_summary(summary_map, mo_group, base_product="Generic Product"):
-    """Helper to ensure MO exists in summary even if missing from MO_Data sheet"""
+def ensure_mo_in_summary(summary_map, mo_group, potential_family="Unknown Bearing"):
     if mo_group not in summary_map:
         summary_map[mo_group] = {
             "mo": mo_group, 
-            "base_product": base_product, 
+            "base_product": potential_family if is_valid_family(potential_family) else "Unknown Bearing", 
             "ch_qty": 0.0, 
             "ch_date": None,
             "components": {
@@ -79,6 +82,11 @@ def ensure_mo_in_summary(summary_map, mo_group, base_product="Generic Product"):
                 "OM": {"qty_req": 0, "sho": 0, "sho_d": "-", "tb": 0, "tb_d": "-"}
             }
         }
+    else:
+        # Update family name if we found a better one than the default
+        if is_valid_family(potential_family) and summary_map[mo_group]["base_product"] == "Unknown Bearing":
+            summary_map[mo_group]["base_product"] = potential_family
+            
     return summary_map[mo_group]
 
 def process_traceability_data():
@@ -97,11 +105,11 @@ def process_traceability_data():
         raw_jw_data = []
         raw_ch_data = []
 
-        # 1. MO Data (Extract Target Qty & IM/OM)
+        # 1. MO Data
         for _, df in mo_sheets.items():
             if "mo#" not in df.columns: continue
             
-            # Apply PDIV Filter (Exclude everything except 227D and 227T)
+            # PDIV Filter
             if "pdiv" in df.columns:
                 df["pdiv"] = df["pdiv"].fillna("").astype(str).str.strip().str.upper()
                 df = df[df["pdiv"].isin(["227D", "227T"])]
@@ -112,7 +120,7 @@ def process_traceability_data():
                 
                 mo_group = get_mo_group(raw_mo)
                 qty_req = clean_nan(row.get("qty req") if "qty req" in df.columns else 0)
-                final_variant = str(row.get("finalvariant")).strip() if "finalvariant" in df.columns and not pd.isna(row.get("finalvariant")) else "Generic Product"
+                final_variant = str(row.get("finalvariant")).strip() if "finalvariant" in df.columns and not pd.isna(row.get("finalvariant")) else ""
                 
                 comp_raw = row.get("comp item") if "comp item" in df.columns else ""
                 comp_type = determine_component(comp_raw)
@@ -125,7 +133,7 @@ def process_traceability_data():
                 data = ensure_mo_in_summary(summary_map, mo_group, final_variant)
                 data["components"][comp_type]["qty_req"] += qty_req
 
-        # 2. JobWork Data (SHO & TB mapping by IM/OM)
+        # 2. JobWork Data
         for _, df in jobwork_sheets.items():
             if "po / pr no." not in df.columns: continue
             for _, row in df.iterrows():
@@ -133,7 +141,7 @@ def process_traceability_data():
                 if not raw_mo: continue
                 
                 mo_group = get_mo_group(raw_mo)
-                variant = str(row.get("product")).strip() if "product" in df.columns and not pd.isna(row.get("product")) else "Generic Product"
+                variant = str(row.get("product")).strip() if "product" in df.columns and not pd.isna(row.get("product")) else ""
                 comp_type = determine_component(variant)
 
                 sho_qty = clean_nan(row.get("qty approved") if "qty approved" in df.columns else 0)
@@ -146,7 +154,6 @@ def process_traceability_data():
                     "sho_qty": sho_qty, "tb_qty": tb_qty, "sho_date": sho_date, "tb_date": tb_date
                 })
 
-                # Always process JW even if MO wasn't in MO_Data
                 data = ensure_mo_in_summary(summary_map, mo_group, variant)
                 data["components"][comp_type]["sho"] += sho_qty
                 data["components"][comp_type]["tb"] += tb_qty
@@ -164,7 +171,7 @@ def process_traceability_data():
                 if not raw_mo: continue
                 
                 mo_group = get_mo_group(raw_mo)
-                variant = str(row.get(type_col)).strip() if type_col and not pd.isna(row.get(type_col)) else "Generic Product"
+                variant = str(row.get(type_col)).strip() if type_col and not pd.isna(row.get(type_col)) else ""
                 ch_qty = clean_nan(row.get("cumulative production") if "cumulative production" in df.columns else 0)
                 ch_date = parse_date_safe(row.get("date") if "date" in df.columns else None)
 
@@ -172,10 +179,9 @@ def process_traceability_data():
                     "mo_group": mo_group, "variant": variant, "ch_qty": ch_qty, "ch_date": ch_date
                 })
 
-                # Always process Channel data even if MO wasn't in MO_Data
                 data = ensure_mo_in_summary(summary_map, mo_group, variant)
-                if ch_qty > data["ch_qty"]:
-                    data["ch_qty"] = ch_qty
+                # FIX: SUMMATION INSTEAD OF MAX
+                data["ch_qty"] += ch_qty
                 if ch_date: 
                     data["ch_date"] = str(ch_date)
 
@@ -233,72 +239,37 @@ def get_all_mos():
 @router.get("/traceability_report/{mo}")
 def get_traceability_flow(mo: str):
     search_group = get_mo_group(clean_mo(mo))
-    variant_map = {}
+    rows = []
 
-    def get_var(v_dict, v_name):
-        if v_name not in v_dict:
-            v_dict[v_name] = {
-                "ch_qty": 0, "ch_date": None,
-                "components": {
-                    "IM": {"qty_req": 0, "sho": 0, "sho_d": "-", "tb": 0, "tb_d": "-"},
-                    "OM": {"qty_req": 0, "sho": 0, "sho_d": "-", "tb": 0, "tb_d": "-"}
-                }
-            }
-        return v_dict[v_name]
-
-    def find_match(target, current_map):
-        if target in current_map: return target
-        for k in current_map.keys():
-            if target and target in k: return k
-        return list(current_map.keys())[0] if current_map else target
-
-    # Map Variants & Targets
-    for r in GLOBAL_RAW_RECORDS["mo_data"]:
-        if r["mo_group"] == search_group:
-            v_name = r["variant"] if r["variant"] else "Generic Variant"
-            v = get_var(variant_map, v_name)
-            v["components"][r["comp_type"]]["qty_req"] += r["qty_req"]
-
-    # Map SHO/TB Jobwork
+    # 1. Map Individual JobWork Entries (Exact Variants)
     for r in GLOBAL_RAW_RECORDS["jw_data"]:
         if r["mo_group"] == search_group:
-            v_name = find_match(r["variant"], variant_map)
-            v = get_var(variant_map, v_name)
-            c = r["comp_type"]
-            v["components"][c]["sho"] += r["sho_qty"]
-            v["components"][c]["tb"] += r["tb_qty"]
-            if r["sho_date"]: v["components"][c]["sho_d"] = str(r["sho_date"])
-            if r["tb_date"]: v["components"][c]["tb_d"] = str(r["tb_date"])
+            v_name = r["variant"] if r["variant"] else f"{r['comp_type']} Component"
+            
+            if r["sho_qty"] > 0:
+                rows.append({
+                    "mo_ref": search_group, "department": "SHO Department", 
+                    "variant": v_name, "in_date": str(r["sho_date"]) if r["sho_date"] else "-", 
+                    "out_date": "-", "qty": math.ceil(r["sho_qty"]), "status": "Allocated"
+                })
+            
+            if r["tb_qty"] > 0:
+                rows.append({
+                    "mo_ref": search_group, "department": "Transit Buffer", 
+                    "variant": v_name, "in_date": "-", 
+                    "out_date": str(r["tb_date"]) if r["tb_date"] else "-", 
+                    "qty": math.ceil(r["tb_qty"]), "status": "In Transit"
+                })
 
-    # Map Channels
+    # 2. Map Individual Channel Variants (Exact entries from Channel Data)
     for r in GLOBAL_RAW_RECORDS["ch_data"]:
         if r["mo_group"] == search_group:
-            v_name = find_match(r["variant"], variant_map)
-            v = get_var(variant_map, v_name)
-            if r["ch_qty"] > v["ch_qty"]:
-                v["ch_qty"] = r["ch_qty"]
-            if r["ch_date"]: v["ch_date"] = str(r["ch_date"])
-
-    # Build Exact TBE Sequential Data Model for Frontend Drilldown
-    rows = []
-    for var_name, data in variant_map.items():
-        im = data["components"]["IM"]
-        om = data["components"]["OM"]
-        
-        # 1. IM Workflows
-        if im["sho"] > 0:
-            rows.append({"mo_ref": search_group, "department": "SHO Department", "variant": f"IM - {var_name}", "in_date": im["sho_d"], "out_date": "-", "qty": math.ceil(im["sho"]), "status": "Allocated"})
-        if im["tb"] > 0:
-            rows.append({"mo_ref": search_group, "department": "Transit Buffer", "variant": f"IM - {var_name}", "in_date": "-", "out_date": im["tb_d"], "qty": math.ceil(im["tb"]), "status": "In Transit"})
-            
-        # 2. OM Workflows
-        if om["sho"] > 0:
-            rows.append({"mo_ref": search_group, "department": "SHO Department", "variant": f"OM - {var_name}", "in_date": om["sho_d"], "out_date": "-", "qty": math.ceil(om["sho"]), "status": "Allocated"})
-        if om["tb"] > 0:
-            rows.append({"mo_ref": search_group, "department": "Transit Buffer", "variant": f"OM - {var_name}", "in_date": "-", "out_date": om["tb_d"], "qty": math.ceil(om["tb"]), "status": "In Transit"})
-            
-        # 3. Channel Pipeline
-        if data["ch_qty"] > 0:
-            rows.append({"mo_ref": search_group, "department": "Channel Section", "variant": var_name, "in_date": data.get("ch_date") or "-", "out_date": "-", "qty": math.ceil(data["ch_qty"]), "status": "Completed"})
+            if r["ch_qty"] > 0:
+                rows.append({
+                    "mo_ref": search_group, "department": "Channel Section", 
+                    "variant": r["variant"] if r["variant"] else "Generic Product", 
+                    "in_date": str(r["ch_date"]) if r["ch_date"] else "-", 
+                    "out_date": "-", "qty": math.ceil(r["ch_qty"]), "status": "Completed"
+                })
 
     return {"status": "success", "data": {"mo": search_group, "rows": rows}}
