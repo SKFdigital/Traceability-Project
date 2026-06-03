@@ -6,6 +6,7 @@ import threading
 import time
 import math
 import re
+import concurrent.futures
 from datetime import datetime
 from settings import settings
 
@@ -26,10 +27,10 @@ def clean_mo(value):
     val = str(value).strip().upper().replace(" ", "")
     if val.endswith(".0"): 
         val = val[:-2]
-    if not val or val in ["NAN", "-", "...", "", "NAT", "NONE"]: 
+    if not val or val in ["NAN", "-", "...", "", "NAT", "NONE", "NA", "NULL"]: 
         return None
-    if len(val) < 3: 
-        return None # Prevents stray 1-2 character anomalies from creating ghost groups
+    if len(val) < 4: 
+        return None # MOs should be at least 4 characters long
     return val
 
 def get_mo_group(clean_mo_str):
@@ -51,7 +52,6 @@ def clean_family_name(text):
     match = re.search(r'(\d{3,}[A-Z0-9\-]*)', t)
     if match:
         core = match.group(1)
-        # Strip trailing IM/OM if physically attached to the digits (e.g., '6007IM' -> '6007')
         core = re.sub(r'(?i)(IM|OM)$', '', core)
         return core.strip('- ')
         
@@ -79,6 +79,7 @@ def determine_component(text):
     return "IM" 
 
 def load_excel_sheets(url):
+    """Fetches and parses a single Excel URL into a dictionary of DataFrames."""
     try:
         resp = HTTP_SESSION.get(url, timeout=30)
         if resp.status_code != 200: return {}
@@ -92,6 +93,16 @@ def load_excel_sheets(url):
     except Exception as e:
         print(f"Error loading {url}: {e}")
         return {}
+
+def fetch_all_data_concurrently():
+    """Dramatically speeds up data loading by downloading all 4 sheets in parallel."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        f_mo = executor.submit(load_excel_sheets, settings.MO_DATA_URL)
+        f_jw = executor.submit(load_excel_sheets, settings.JOBWORK_REPORT_URL)
+        f_trb = executor.submit(load_excel_sheets, settings.TRB_MASTER_URL)
+        f_dgbb = executor.submit(load_excel_sheets, settings.DGBB_MASTER_URL)
+        
+        return f_mo.result(), f_jw.result(), f_trb.result(), f_dgbb.result()
 
 def ensure_mo_in_summary(summary_map, mo_group, potential_family="Unknown Bearing"):
     if mo_group not in summary_map:
@@ -117,10 +128,8 @@ def process_traceability_data():
     IS_UPDATING = True
 
     try:
-        mo_sheets = load_excel_sheets(settings.MO_DATA_URL)
-        jobwork_sheets = load_excel_sheets(settings.JOBWORK_REPORT_URL)
-        trb_sheets = load_excel_sheets(settings.TRB_MASTER_URL)
-        dgbb_sheets = load_excel_sheets(settings.DGBB_MASTER_URL)
+        # Load all sheets in parallel to fix the 2-minute delay
+        mo_sheets, jobwork_sheets, trb_sheets, dgbb_sheets = fetch_all_data_concurrently()
 
         summary_map = {}
         raw_mo_data = []
@@ -142,7 +151,6 @@ def process_traceability_data():
                 mo_group = get_mo_group(raw_mo)
                 if not mo_group: continue
                 
-                # FIXED: Safely process component without skipping valid rows
                 comp_raw = str(row.get("comp item", "")).strip()
                 comp_type = determine_component(comp_raw)
                 
@@ -150,11 +158,10 @@ def process_traceability_data():
                 final_variant = clean_family_name(row.get("finalvariant"))
                 
                 raw_mo_data.append({"mo_group": mo_group, "variant": final_variant, "comp_type": comp_type, "qty_req": qty_req})
-
                 data = ensure_mo_in_summary(summary_map, mo_group, final_variant)
                 
-                # EXACT ASSIGNMENT: Directly sets the target quantity per your instructions
-                data["components"][comp_type]["qty_req"] = qty_req
+                # Restored to += to ensure valid rows are added together and not overwritten by zero-rows
+                data["components"][comp_type]["qty_req"] += qty_req
 
         # 2. JobWork Data
         for _, df in jobwork_sheets.items():
@@ -168,8 +175,11 @@ def process_traceability_data():
                 
                 raw_product = row.get("product", "")
                 variant = clean_family_name(raw_product)
-                comp_type = determine_component(raw_product)
+                
+                # Blocks ghost records where MO is accidentally typed as the bearing number
+                if mo_group == variant: continue 
 
+                comp_type = determine_component(raw_product)
                 sho_qty = clean_nan(row.get("qty approved", 0))
                 tb_qty = clean_nan(row.get("qty returned", 0))
                 sho_date = parse_date_safe(row.get("jw challan date"))
@@ -200,6 +210,10 @@ def process_traceability_data():
                 if not mo_group: continue
                 
                 variant = clean_family_name(row.get(type_col)) if type_col else "Unknown Bearing"
+                
+                # Blocks ghost records where MO is accidentally typed as the bearing number
+                if mo_group == variant: continue 
+
                 ch_qty = clean_nan(row.get("production", 0))
                 ch_date = parse_date_safe(row.get("date"))
 
