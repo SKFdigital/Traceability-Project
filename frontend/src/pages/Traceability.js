@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import './Traceability.css';
+import './Traceability.css'; // Assuming this shares styles with TBE.css for the modal
 
 const API = 'https://scm-backend-pshv.onrender.com';
 
 const Traceability = () => {
   const [summaryData, setSummaryData] = useState([]);
+  
+  // Drilldown Breakout States (TBE Modal Style)
   const [selectedMoFlow, setSelectedMoFlow] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -40,8 +43,10 @@ const Traceability = () => {
 
   const handleViewDetail = async (moString) => {
     try {
-      setLoading(true);
-      setError('');
+      // Open modal frame immediately and show loading spinner inside it
+      setSelectedMoFlow({ mo: moString, flow_data: [] }); 
+      setDetailLoading(true);
+      
       const res = await fetch(`${API}/traceability_report/${moString.trim()}`);
       if (!res.ok) throw new Error('Could not pull variant flow.');
       const json = await res.json();
@@ -53,9 +58,9 @@ const Traceability = () => {
         });
       }
     } catch (err) {
-      setError(err.message);
+      console.error(err.message);
     } finally {
-      setLoading(false);
+      setDetailLoading(false);
     }
   };
 
@@ -64,11 +69,10 @@ const Traceability = () => {
     (item.base_product && String(item.base_product).toLowerCase().includes(search.toLowerCase()))
   );
 
-  // Helper logic to merge MOs / Variants & unified Channel outputs vertically
   const getRowSpan = (dataArray, currentIndex, keyField) => {
     const currentVal = dataArray[currentIndex][keyField];
     if (currentIndex > 0 && dataArray[currentIndex - 1][keyField] === currentVal) {
-      return 0; // Hide cell if it's identical to the row above it
+      return 0; 
     }
     let span = 1;
     while (currentIndex + span < dataArray.length && dataArray[currentIndex + span][keyField] === currentVal) {
@@ -82,29 +86,21 @@ const Traceability = () => {
       <div className="header-section">
         <div>
           <h1>MO Traceability Tracking</h1>
-          <p className="sub-tag">
-            {selectedMoFlow ? `Variant Breakdown / MO: ${selectedMoFlow.mo}` : "Global Order Summary by Family"}
-          </p>
+          <p className="sub-tag">Global Order Summary by Family</p>
         </div>
         
         <div className="control-actions">
-          {selectedMoFlow ? (
-            <button className="back-btn" onClick={() => setSelectedMoFlow(null)}>
-              ← Back to Summary
-            </button>
-          ) : (
-            <input
-              className="search-box"
-              placeholder="Search MO or Family..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              disabled={isInitializing}
-            />
-          )}
+          <input
+            className="search-box"
+            placeholder="Search MO or Family..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            disabled={isInitializing}
+          />
         </div>
       </div>
 
-      {error && <div className="error-box">{error}</div>}
+      {error && <div className="error-box">⚠️ Network Error: {error}</div>}
       
       {isInitializing && (
         <div className="initializing-box">
@@ -113,8 +109,8 @@ const Traceability = () => {
         </div>
       )}
 
-      {/* MAIN DASHBOARD: SPLIT BY IM/OM, MERGED AT CHANNEL */}
-      {!loading && !isInitializing && !selectedMoFlow && (
+      {/* MAIN DASHBOARD */}
+      {!loading && !isInitializing && (
         <div className="table-wrapper">
           <table className="trace-table">
             <thead>
@@ -144,11 +140,16 @@ const Traceability = () => {
                 const moSpan = getRowSpan(filteredSummary, idx, 'mo');
                 return (
                   <tr key={idx} className="data-row">
+                    {/* Interactive Clickable MO Cell (Matches TBE logic) */}
                     {moSpan > 0 && (
-                      <td rowSpan={moSpan} className="merged-mo-cell">
-                        <button className="mo-link-btn" onClick={() => handleViewDetail(row.mo)}>
-                          {row.mo}
-                        </button>
+                      <td 
+                        rowSpan={moSpan} 
+                        className="merged-mo-cell fw-bold text-primary clickable-family-cell"
+                        title="Click to view full variant breakdown"
+                        style={{ cursor: 'pointer', color: '#0284c7' }}
+                        onClick={() => handleViewDetail(row.mo)}
+                      >
+                        {row.mo}
                       </td>
                     )}
                     {moSpan > 0 && (
@@ -157,7 +158,7 @@ const Traceability = () => {
                       </td>
                     )}
                     
-                    {/* Unique per IM/OM Component */}
+                    {/* Split IM/OM Rows */}
                     <td style={{ fontWeight: 600, color: row.component === 'IM' ? '#0369a1' : '#b45309' }}>
                       {row.component}
                     </td>
@@ -167,20 +168,18 @@ const Traceability = () => {
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '-'}</td>
                     <td>{row.tb_date}</td>
                     
-                    {/* Merges Back Together for Channel & Status */}
+                    {/* Re-Merged Channel Output */}
                     {moSpan > 0 && (
-                      <td rowSpan={moSpan} className="merged-channel-cell fw-bold">
+                      <td rowSpan={moSpan} className="merged-channel-cell fw-bold text-success">
                         {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}
                       </td>
                     )}
                     {moSpan > 0 && (
-                      <td rowSpan={moSpan} className="merged-channel-cell">
-                        {row.ch_date}
-                      </td>
+                      <td rowSpan={moSpan} className="merged-channel-cell">{row.ch_date}</td>
                     )}
                     {moSpan > 0 && (
                       <td rowSpan={moSpan} className="merged-channel-cell">
-                        <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                        <span className={`status-badge ${row.status ? row.status.toLowerCase().replace(/\s+/g, '-') : ''}`}>
                           {row.status}
                         </span>
                       </td>
@@ -193,75 +192,95 @@ const Traceability = () => {
         </div>
       )}
 
-      {/* DRILLDOWN: TBE VARIANT FORMAT (SPLIT BY IM/OM, MERGED CHANNEL) */}
-      {!loading && selectedMoFlow && (
-        <div className="table-wrapper">
-          <table className="trace-table">
-            <thead>
-              <tr className="super-header">
-                <th colSpan="2" className="meta-head">Variant Details</th>
-                <th colSpan="2" className="sho-head">SHO Dept</th>
-                <th colSpan="2" className="tb-head">Transit Buffer</th>
-                <th colSpan="2" className="ch-head">Channel Processing</th>
-                <th className="meta-head">Final Status</th>
-              </tr>
-              <tr className="sub-header">
-                <th>Final Variant</th>
-                <th>Comp</th>
-                <th>Req Qty</th>
-                <th>SHO Qty</th>
-                <th>Date</th>
-                <th>TB Qty</th>
-                <th>Date</th>
-                <th>Chan Qty</th>
-                <th>Date</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedMoFlow.flow_data.map((row, idx) => {
-                const varSpan = getRowSpan(selectedMoFlow.flow_data, idx, 'variant');
-                return (
-                  <tr key={idx} className="data-row">
-                    {varSpan > 0 && (
-                      <td rowSpan={varSpan} className="merged-mo-cell fw-bold" style={{ color: '#0284c7' }}>
-                        {row.variant}
-                      </td>
-                    )}
-                    
-                    {/* Unique per IM/OM Component */}
-                    <td style={{ fontWeight: 600, color: row.component === 'IM' ? '#0369a1' : '#b45309' }}>
-                      {row.component}
-                    </td>
-                    <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
-                    <td>{row.sho_qty > 0 ? Number(row.sho_qty).toLocaleString() : '-'}</td>
-                    <td>{row.sho_date}</td>
-                    <td>{row.tb_qty > 0 ? Number(row.tb_qty).toLocaleString() : '-'}</td>
-                    <td>{row.tb_date}</td>
-                    
-                    {/* Merges Back Together for Channel & Status */}
-                    {varSpan > 0 && (
-                      <td rowSpan={varSpan} className="merged-channel-cell fw-bold">
-                        {row.ch_qty > 0 ? Number(row.ch_qty).toLocaleString() : '-'}
-                      </td>
-                    )}
-                    {varSpan > 0 && (
-                      <td rowSpan={varSpan} className="merged-channel-cell">
-                        {row.ch_date}
-                      </td>
-                    )}
-                    {varSpan > 0 && (
-                      <td rowSpan={varSpan} className="merged-channel-cell">
-                        <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
-                          {row.status}
-                        </span>
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {/* DRILLDOWN MODAL - EXACT TBE FORMAT */}
+      {selectedMoFlow && (
+        <div className="modal-overlay" onClick={() => setSelectedMoFlow(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h3>Variant Breakdown Matrix</h3>
+                <p className="modal-subheading">MO Scope: <strong>{selectedMoFlow.mo}</strong></p>
+              </div>
+              <button className="close-modal-btn" onClick={() => setSelectedMoFlow(null)}>&times;</button>
+            </div>
+            <div className="modal-body">
+              {detailLoading ? (
+                <div className="detail-loading-box">
+                  <div className="spinner"></div>
+                  <p>Querying variant records...</p>
+                </div>
+              ) : selectedMoFlow.flow_data.length === 0 ? (
+                <div className="empty-state">No variant details found for this MO.</div>
+              ) : (
+                <div className="modal-table-wrapper">
+                  <table className="trace-table" style={{ width: '100%', margin: 0 }}>
+                    <thead>
+                      <tr className="super-header">
+                        <th colSpan="2" className="meta-head">Variant Details</th>
+                        <th colSpan="2" className="sho-head">SHO Target</th>
+                        <th colSpan="2" className="tb-head">Transit Buffer</th>
+                        <th colSpan="2" className="ch-head">Channel Section</th>
+                        <th className="meta-head">Final Status</th>
+                      </tr>
+                      <tr className="sub-header">
+                        <th>Final Variant</th>
+                        <th>Comp</th>
+                        <th>Req Qty</th>
+                        <th>SHO Qty</th>
+                        <th>Date</th>
+                        <th>TB Qty</th>
+                        <th>Date</th>
+                        <th>Chan Qty</th>
+                        <th>Date</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedMoFlow.flow_data.map((row, idx) => {
+                        const varSpan = getRowSpan(selectedMoFlow.flow_data, idx, 'variant');
+                        return (
+                          <tr key={idx} className="modal-data-row">
+                            {varSpan > 0 && (
+                              <td rowSpan={varSpan} className="merged-mo-cell fw-bold text-start" style={{ color: '#0f172a' }}>
+                                {row.variant}
+                              </td>
+                            )}
+                            
+                            {/* Split IM/OM Components inside the Modal */}
+                            <td style={{ fontWeight: 600, color: row.component === 'IM' ? '#0369a1' : '#b45309' }}>
+                              {row.component}
+                            </td>
+                            <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
+                            <td>{row.sho_qty > 0 ? Number(row.sho_qty).toLocaleString() : '-'}</td>
+                            <td>{row.sho_date}</td>
+                            <td>{row.tb_qty > 0 ? Number(row.tb_qty).toLocaleString() : '-'}</td>
+                            <td>{row.tb_date}</td>
+                            
+                            {/* Re-merged Channel output inside the modal */}
+                            {varSpan > 0 && (
+                              <td rowSpan={varSpan} className="merged-channel-cell fw-bold text-success">
+                                {row.ch_qty > 0 ? Number(row.ch_qty).toLocaleString() : '-'}
+                              </td>
+                            )}
+                            {varSpan > 0 && (
+                              <td rowSpan={varSpan} className="merged-channel-cell">{row.ch_date}</td>
+                            )}
+                            {varSpan > 0 && (
+                              <td rowSpan={varSpan} className="merged-channel-cell">
+                                <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                                  {row.status}
+                                </span>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
