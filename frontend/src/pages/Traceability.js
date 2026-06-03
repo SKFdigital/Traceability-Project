@@ -64,13 +64,14 @@ const Traceability = () => {
     (item.base_product && String(item.base_product).toLowerCase().includes(search.toLowerCase()))
   );
 
-  const getMoRowSpan = (dataArray, currentIndex) => {
-    const currentMo = dataArray[currentIndex].mo;
-    if (currentIndex > 0 && dataArray[currentIndex - 1].mo === currentMo) {
-      return 0;
+  // Helper logic to merge MOs / Variants & unified Channel outputs vertically
+  const getRowSpan = (dataArray, currentIndex, keyField) => {
+    const currentVal = dataArray[currentIndex][keyField];
+    if (currentIndex > 0 && dataArray[currentIndex - 1][keyField] === currentVal) {
+      return 0; // Hide cell if it's identical to the row above it
     }
     let span = 1;
-    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span].mo === currentMo) {
+    while (currentIndex + span < dataArray.length && dataArray[currentIndex + span][keyField] === currentVal) {
       span++;
     }
     return span;
@@ -112,7 +113,7 @@ const Traceability = () => {
         </div>
       )}
 
-      {/* MAIN DASHBOARD: GROUPED BY FAMILY (BASE PRODUCT) */}
+      {/* MAIN DASHBOARD: SPLIT BY IM/OM, MERGED AT CHANNEL */}
       {!loading && !isInitializing && !selectedMoFlow && (
         <div className="table-wrapper">
           <table className="trace-table">
@@ -126,20 +127,21 @@ const Traceability = () => {
               </tr>
               <tr className="sub-header">
                 <th>MO Number</th>
-                <th>Family (Base Product)</th>
+                <th>Family / Base Product</th>
+                <th>Component</th>
                 <th>Target Qty</th>
-                <th>Qty</th>
-                <th>In Date</th>
-                <th>Qty</th>
-                <th>Out Date</th>
-                <th>Qty</th>
-                <th>Out Date</th>
+                <th>SHO Qty</th>
+                <th>Date</th>
+                <th>TB Qty</th>
+                <th>Date</th>
+                <th>Chan Qty</th>
+                <th>Date</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
               {filteredSummary.map((row, idx) => {
-                const moSpan = getMoRowSpan(filteredSummary, idx);
+                const moSpan = getRowSpan(filteredSummary, idx, 'mo');
                 return (
                   <tr key={idx} className="data-row">
                     {moSpan > 0 && (
@@ -149,23 +151,40 @@ const Traceability = () => {
                         </button>
                       </td>
                     )}
-                    <td className="fw-bold">{row.base_product}</td>
-                    <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
+                    {moSpan > 0 && (
+                      <td rowSpan={moSpan} className="merged-mo-cell fw-bold">
+                        {row.base_product}
+                      </td>
+                    )}
                     
+                    {/* Unique per IM/OM Component */}
+                    <td style={{ fontWeight: 600, color: row.component === 'IM' ? '#0369a1' : '#b45309' }}>
+                      {row.component}
+                    </td>
+                    <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
                     <td>{row.sho_qty ? Number(row.sho_qty).toLocaleString() : '-'}</td>
                     <td>{row.sho_date}</td>
-                    
                     <td>{row.tb_qty ? Number(row.tb_qty).toLocaleString() : '-'}</td>
                     <td>{row.tb_date}</td>
                     
-                    <td className="fw-bold">{row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}</td>
-                    <td>{row.ch_date}</td>
-                    
-                    <td>
-                      <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
-                        {row.status}
-                      </span>
-                    </td>
+                    {/* Merges Back Together for Channel & Status */}
+                    {moSpan > 0 && (
+                      <td rowSpan={moSpan} className="merged-channel-cell fw-bold">
+                        {row.ch_qty ? Number(row.ch_qty).toLocaleString() : '-'}
+                      </td>
+                    )}
+                    {moSpan > 0 && (
+                      <td rowSpan={moSpan} className="merged-channel-cell">
+                        {row.ch_date}
+                      </td>
+                    )}
+                    {moSpan > 0 && (
+                      <td rowSpan={moSpan} className="merged-channel-cell">
+                        <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                          {row.status}
+                        </span>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -174,7 +193,7 @@ const Traceability = () => {
         </div>
       )}
 
-      {/* DRILLDOWN: EXACT TBE FORMAT BY FINAL VARIANT */}
+      {/* DRILLDOWN: TBE VARIANT FORMAT (SPLIT BY IM/OM, MERGED CHANNEL) */}
       {!loading && selectedMoFlow && (
         <div className="table-wrapper">
           <table className="trace-table">
@@ -188,38 +207,59 @@ const Traceability = () => {
               </tr>
               <tr className="sub-header">
                 <th>Final Variant</th>
+                <th>Comp</th>
                 <th>Req Qty</th>
                 <th>SHO Qty</th>
-                <th>Last Date</th>
+                <th>Date</th>
                 <th>TB Qty</th>
-                <th>Last Date</th>
+                <th>Date</th>
                 <th>Chan Qty</th>
-                <th>Last Date</th>
+                <th>Date</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {selectedMoFlow.flow_data.map((row, index) => (
-                <tr key={index} className="data-row">
-                  <td className="fw-bold" style={{ color: '#0284c7' }}>{row.variant}</td>
-                  <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
-                  
-                  <td>{row.sho_qty > 0 ? Number(row.sho_qty).toLocaleString() : '-'}</td>
-                  <td>{row.sho_date}</td>
-                  
-                  <td>{row.tb_qty > 0 ? Number(row.tb_qty).toLocaleString() : '-'}</td>
-                  <td>{row.tb_date}</td>
-                  
-                  <td className="fw-bold">{row.ch_qty > 0 ? Number(row.ch_qty).toLocaleString() : '-'}</td>
-                  <td>{row.ch_date}</td>
-                  
-                  <td>
-                    <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
-                      {row.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {selectedMoFlow.flow_data.map((row, idx) => {
+                const varSpan = getRowSpan(selectedMoFlow.flow_data, idx, 'variant');
+                return (
+                  <tr key={idx} className="data-row">
+                    {varSpan > 0 && (
+                      <td rowSpan={varSpan} className="merged-mo-cell fw-bold" style={{ color: '#0284c7' }}>
+                        {row.variant}
+                      </td>
+                    )}
+                    
+                    {/* Unique per IM/OM Component */}
+                    <td style={{ fontWeight: 600, color: row.component === 'IM' ? '#0369a1' : '#b45309' }}>
+                      {row.component}
+                    </td>
+                    <td className="qty-cell">{row.qty_req > 0 ? Number(row.qty_req).toLocaleString() : '-'}</td>
+                    <td>{row.sho_qty > 0 ? Number(row.sho_qty).toLocaleString() : '-'}</td>
+                    <td>{row.sho_date}</td>
+                    <td>{row.tb_qty > 0 ? Number(row.tb_qty).toLocaleString() : '-'}</td>
+                    <td>{row.tb_date}</td>
+                    
+                    {/* Merges Back Together for Channel & Status */}
+                    {varSpan > 0 && (
+                      <td rowSpan={varSpan} className="merged-channel-cell fw-bold">
+                        {row.ch_qty > 0 ? Number(row.ch_qty).toLocaleString() : '-'}
+                      </td>
+                    )}
+                    {varSpan > 0 && (
+                      <td rowSpan={varSpan} className="merged-channel-cell">
+                        {row.ch_date}
+                      </td>
+                    )}
+                    {varSpan > 0 && (
+                      <td rowSpan={varSpan} className="merged-channel-cell">
+                        <span className={`status-badge ${row.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                          {row.status}
+                        </span>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
