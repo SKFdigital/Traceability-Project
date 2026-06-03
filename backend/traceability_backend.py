@@ -127,7 +127,7 @@ def process_traceability_data():
         raw_jw_data = []
         raw_ch_data = []
 
-        # 1. MO Data (Using to_dict('records') to fix processing speed)
+        # 1. MO Data
         for _, df in mo_sheets.items():
             if "mo#" not in df.columns: continue
             
@@ -142,20 +142,19 @@ def process_traceability_data():
                 mo_group = get_mo_group(raw_mo)
                 if not mo_group: continue
                 
-                comp_raw = str(row.get("comp item", "")).strip().upper()
-                # STRICT FILTER: Only process rows explicitly labeled IM or OM
-                if comp_raw not in ["IM", "OM"]: 
-                    continue
+                # FIXED: Safely process component without skipping valid rows
+                comp_raw = str(row.get("comp item", "")).strip()
+                comp_type = determine_component(comp_raw)
                 
                 qty_req = clean_nan(row.get("qty req", 0))
                 final_variant = clean_family_name(row.get("finalvariant"))
                 
-                raw_mo_data.append({"mo_group": mo_group, "variant": final_variant, "comp_type": comp_raw, "qty_req": qty_req})
+                raw_mo_data.append({"mo_group": mo_group, "variant": final_variant, "comp_type": comp_type, "qty_req": qty_req})
 
                 data = ensure_mo_in_summary(summary_map, mo_group, final_variant)
                 
-                # STRICT ASSIGNMENT: Directly set quantity, do NOT add multiple rows together
-                data["components"][comp_raw]["qty_req"] = qty_req
+                # EXACT ASSIGNMENT: Directly sets the target quantity per your instructions
+                data["components"][comp_type]["qty_req"] = qty_req
 
         # 2. JobWork Data
         for _, df in jobwork_sheets.items():
