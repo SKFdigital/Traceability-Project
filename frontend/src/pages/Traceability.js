@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import './Traceability.css'; // Relies on your existing CSS shared with TBE
+import './Traceability.css'; 
 
 const API = 'https://scm-backend-pshv.onrender.com';
 
